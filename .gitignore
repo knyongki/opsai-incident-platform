@@ -1,0 +1,10 @@
+# Local environment files; only the safe template belongs in Git.
+.env
+.env.*
+!.env.example
+
+# Local build and test artifacts.
+/bin/
+*.exe
+*.test
+/coverage.out
