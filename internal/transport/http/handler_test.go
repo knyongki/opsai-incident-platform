@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,10 +11,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHandler(t *testing.T) {
-	handler := NewHandler(slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	handler := NewHandler(slog.New(slog.NewJSONHandler(io.Discard, nil)), pingFunc(func(context.Context) error { return nil }))
 	for _, tt := range []struct {
 		name, method, path, body string
 		status                   int
@@ -44,6 +46,82 @@ func TestHandler(t *testing.T) {
 				t.Error("missing Allow header")
 			}
 		})
+	}
+}
+
+type pingFunc func(context.Context) error
+
+func (f pingFunc) Ping(ctx context.Context) error { return f(ctx) }
+
+func TestReadiness(t *testing.T) {
+	for _, tt := range []struct {
+		name, method, path string
+		pingError          error
+		status, calls      int
+	}{
+		{"reachable", "GET", "/ready", nil, 200, 1},
+		{"unavailable", "GET", "/ready", errors.New("example-private-connection-detail"), 503, 1},
+		{"health independent", "GET", "/health", errors.New("offline"), 200, 0},
+		{"head reachable", "HEAD", "/ready", nil, 200, 1},
+		{"head unavailable", "HEAD", "/ready", errors.New("offline"), 503, 1},
+		{"method checked first", "POST", "/ready", nil, 405, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logs, nil))
+			database := pingFunc(func(ctx context.Context) error {
+				calls++
+				deadline, ok := ctx.Deadline()
+				if !ok || time.Until(deadline) > readinessTimeout {
+					t.Error("readiness ping must have a bounded deadline")
+				}
+				return tt.pingError
+			})
+			rr := httptest.NewRecorder()
+			NewHandler(logger, database).ServeHTTP(rr, httptest.NewRequest(tt.method, tt.path, nil))
+			if rr.Code != tt.status || calls != tt.calls {
+				t.Fatalf("status = %d, calls = %d; want %d, %d", rr.Code, calls, tt.status, tt.calls)
+			}
+			if rr.Header().Get("Content-Type") != "application/json" {
+				t.Error("missing JSON content type")
+			}
+			if tt.method == "HEAD" && rr.Body.Len() != 0 {
+				t.Error("HEAD returned a body")
+			}
+			if tt.status == 503 && tt.method == "GET" && strings.TrimSpace(rr.Body.String()) != `{"error":{"code":"DATABASE_UNAVAILABLE","message":"The database is unavailable."}}` {
+				t.Errorf("unexpected error envelope: %s", rr.Body.String())
+			}
+			if strings.Contains(logs.String()+rr.Body.String(), "example-private-connection-detail") {
+				t.Error("connection details leaked")
+			}
+		})
+	}
+}
+
+func TestReadinessCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	checker := pingFunc(func(ctx context.Context) error {
+		if !errors.Is(ctx.Err(), context.Canceled) {
+			t.Error("request cancellation was not propagated")
+		}
+		return ctx.Err()
+	})
+	rr := httptest.NewRecorder()
+	NewHandler(slog.New(slog.NewJSONHandler(io.Discard, nil)), checker).ServeHTTP(rr,
+		httptest.NewRequest("GET", "/ready", nil).WithContext(ctx))
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rr.Code)
+	}
+}
+
+func TestReadinessMissingChecker(t *testing.T) {
+	rr := httptest.NewRecorder()
+	NewHandler(slog.New(slog.NewJSONHandler(io.Discard, nil)), nil).ServeHTTP(rr,
+		httptest.NewRequest("GET", "/ready", nil))
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rr.Code)
 	}
 }
 

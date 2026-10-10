@@ -3,9 +3,11 @@
 ## Scope
 
 Read `docs/OpsAI-Project-Blueprint.md` completely before changing the project.
-Current scope is Milestone 1: the Go API foundation only. Do not add PostgreSQL,
-Docker, devices, incidents, background workers, AI, MQTT, authentication, or later
-milestones without an explicit new user request.
+Current scope includes Milestone 1 and Milestone 2A: PostgreSQL foundation only.
+Milestone 2A allows PostgreSQL Compose setup, pgx/v5 pooling, database readiness,
+Goose migrations for the devices table, and sqlc configuration. Do not add device
+HTTP endpoints or queries, incidents, workers, AI, MQTT, authentication, or later
+features without an explicit new user request.
 
 ## Architecture
 
@@ -13,8 +15,11 @@ milestones without an explicit new user request.
 - `cmd/api` wires configuration, logging, HTTP startup, and shutdown.
 - `internal/config` loads and validates environment configuration.
 - `internal/platform/logging` constructs `log/slog` structured logging.
+- `internal/platform/database` owns PostgreSQL pool construction and startup checks.
+- `db/migrations` holds Goose migrations; `db/sqlc.yaml` configures future queries.
 - `internal/transport/http` owns handlers, JSON envelopes, and HTTP server settings.
 - Prefer idiomatic Go and the standard library. Ask before adding third-party dependencies.
+  The user has authorized pgx/v5, Goose, and sqlc for the PostgreSQL foundation.
 - Keep architecture simple; introduce interfaces only where a consumer needs one.
 - Future domain/service code must remain independent of transport and providers.
 - Pass contexts across operations and use bounded timeouts at process boundaries.
@@ -28,14 +33,19 @@ Give a short plan before implementation. Run these commands after Go changes:
 
 ```text
 gofmt -w cmd internal
+go mod tidy
 go vet ./...
 go test ./...
+docker compose config --quiet
 ```
 
 Fix problems introduced by the changes. Review tracked diffs and new files for
 secrets, unnecessary files, and scope violations. Report changed files, decisions,
 actual validation results, assumptions/issues, and the next small task. Never
 claim an unexecuted or failed check passed.
+Set the documented local example environment before Compose checks. Keep unit
+tests independent of PostgreSQL. If Docker is available, verify container health,
+migration status, and live API readiness. Report unavailable tools and unrun checks.
 
 ## Safety
 
@@ -50,6 +60,11 @@ claim an unexecuted or failed check passed.
 - Ask before adding any third-party dependency.
 - Bind the server to localhost by default.
 - Never log environment secrets or authorization values.
+- Never print DATABASE_URL or raw database driver errors; they may contain secrets.
+- Keep `.env` ignored and `.env.example` tracked.
+- Do not delete Docker volumes or run `docker compose down -v`.
+- Do not execute destructive database commands. A Goose Down migration is provided
+  for reversibility but must not be run without explicit authorization.
 - Never silently ignore errors.
 - If requirements conflict or important information is missing, stop and ask
   before making a major assumption.

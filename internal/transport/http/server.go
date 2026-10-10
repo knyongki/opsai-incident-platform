@@ -6,10 +6,10 @@ import (
 	"time"
 )
 
-func NewServer(address string, logger *slog.Logger) *http.Server {
+func NewServer(address string, logger *slog.Logger, database ReadinessChecker) *http.Server {
 	return &http.Server{
 		Addr:              address,
-		Handler:           NewHandler(logger),
+		Handler:           NewHandler(logger, database),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,

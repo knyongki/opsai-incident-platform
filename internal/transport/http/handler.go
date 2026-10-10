@@ -2,9 +2,11 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"time"
 )
 
 type successResponse struct {
@@ -24,15 +26,22 @@ type statusData struct {
 	Status string `json:"status"`
 }
 
+// ReadinessChecker is the small consumer-owned interface needed by /ready.
+// Both pgxpool.Pool and test doubles can satisfy it without an adapter.
+type ReadinessChecker interface {
+	Ping(context.Context) error
+}
+
+const readinessTimeout = 2 * time.Second
+
 // NewHandler supports exact paths, including JSON errors for unknown routes.
-func NewHandler(logger *slog.Logger) http.Handler {
+func NewHandler(logger *slog.Logger, database ReadinessChecker) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var status string
 		switch r.URL.Path {
 		case "/health":
 			status = "ok"
 		case "/ready":
-			// No external dependencies exist in Milestone 1.
 			status = "ready"
 		default:
 			writeJSON(logger, w, http.StatusNotFound, errorResponse{apiError{
@@ -46,6 +55,23 @@ func NewHandler(logger *slog.Logger) http.Handler {
 				Code: "METHOD_NOT_ALLOWED", Message: "The request method is not allowed.",
 			}})
 			return
+		}
+		if r.URL.Path == "/ready" {
+			ctx, cancel := context.WithTimeout(r.Context(), readinessTimeout)
+			defer cancel()
+			if database == nil || database.Ping(ctx) != nil {
+				// Keep driver errors and connection details out of logs and responses.
+				logger.Warn("PostgreSQL readiness check failed", "error_code", "DATABASE_UNAVAILABLE")
+				if r.Method == http.MethodHead {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				writeJSON(logger, w, http.StatusServiceUnavailable, errorResponse{apiError{
+					Code: "DATABASE_UNAVAILABLE", Message: "The database is unavailable.",
+				}})
+				return
+			}
 		}
 		if r.Method == http.MethodHead {
 			w.Header().Set("Content-Type", "application/json")

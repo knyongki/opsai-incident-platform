@@ -2,10 +2,12 @@ package config
 
 import (
 	"log/slog"
+	"strings"
 	"testing"
 )
 
 func TestLoad(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://opsai:local-example-only@127.0.0.1:5432/opsai?sslmode=disable")
 	for _, tt := range []struct {
 		name, env, address, level string
 		invalid                   bool
@@ -35,6 +37,39 @@ func TestLoad(t *testing.T) {
 			}
 			if tt.name == "overrides" && (cfg.AppEnv != "test" || cfg.HTTPAddress != "localhost:9090" || cfg.LogLevel != slog.LevelDebug) {
 				t.Fatalf("overrides not applied: %+v", cfg)
+			}
+		})
+	}
+}
+
+func TestDatabaseURL(t *testing.T) {
+	t.Setenv("APP_ENV", "")
+	t.Setenv("HTTP_ADDRESS", "")
+	t.Setenv("LOG_LEVEL", "")
+	for _, tt := range []struct {
+		name, value string
+		valid       bool
+	}{
+		{"missing", "", false},
+		{"whitespace", "  ", false},
+		{"wrong scheme", "https://localhost/opsai", false},
+		{"no host", "postgres:///opsai", false},
+		{"no database", "postgres://localhost", false},
+		{"malformed", "postgres://user:example%zz@localhost/opsai", false},
+		{"postgres", "postgres://opsai:example-only@localhost:5432/opsai?sslmode=disable", true},
+		{"postgresql", "postgresql://localhost/opsai", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("DATABASE_URL", tt.value)
+			cfg, err := Load()
+			if (err == nil) != tt.valid {
+				t.Fatalf("unexpected validity: error = %v", err)
+			}
+			if tt.valid && cfg.DatabaseURL != tt.value {
+				t.Error("DATABASE_URL was not preserved")
+			}
+			if err != nil && strings.Contains(err.Error(), "example") {
+				t.Error("configuration error exposed connection details")
 			}
 		})
 	}

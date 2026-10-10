@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/knyongki/opsai-incident-platform/internal/config"
+	"github.com/knyongki/opsai-incident-platform/internal/platform/database"
 	"github.com/knyongki/opsai-incident-platform/internal/platform/logging"
 	httpapi "github.com/knyongki/opsai-incident-platform/internal/transport/http"
 )
@@ -32,7 +33,13 @@ func run(bootstrapLogger *slog.Logger) error {
 	logger := logging.New(os.Stderr, cfg.LogLevel)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	server := httpapi.NewServer(cfg.HTTPAddress, logger)
+	pool, err := database.Open(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	// serve waits for HTTP shutdown before this deferred cleanup runs.
+	defer pool.Close()
+	server := httpapi.NewServer(cfg.HTTPAddress, logger, pool)
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
 		// Avoid including raw configuration values in startup errors.

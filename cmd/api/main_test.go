@@ -18,7 +18,7 @@ func TestServeAndGracefulShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httpapi.NewServer(listener.Addr().String(), logger)
+	server := httpapi.NewServer(listener.Addr().String(), logger, healthyDatabase{})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	result := make(chan error, 1)
@@ -47,3 +47,7 @@ func TestServeAndGracefulShutdown(t *testing.T) {
 		t.Fatal("shutdown did not complete")
 	}
 }
+
+type healthyDatabase struct{}
+
+func (healthyDatabase) Ping(context.Context) error { return nil }
