@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -35,8 +36,12 @@ type ReadinessChecker interface {
 const readinessTimeout = 2 * time.Second
 
 // NewHandler supports exact paths, including JSON errors for unknown routes.
-func NewHandler(logger *slog.Logger, database ReadinessChecker) http.Handler {
+func NewHandler(logger *slog.Logger, database ReadinessChecker, devices ...DeviceService) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(devices) > 0 && (r.URL.Path == "/api/v1/devices" || strings.HasPrefix(r.URL.Path, "/api/v1/devices/")) {
+			serveDevice(logger, devices[0], w, r)
+			return
+		}
 		var status string
 		switch r.URL.Path {
 		case "/health":

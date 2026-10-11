@@ -1,8 +1,8 @@
 # OpsAI
 
 OpsAI is an AI-assisted incident-analysis platform for industrial equipment,
-written in Go. Implemented scope: **Milestone 1 (Go API Foundation)** and
-**Milestone 2A (PostgreSQL Foundation)**. Device endpoints, incidents, workers,
+written in Go. Implemented scope: **Milestone 1 (Go API Foundation)**,
+**Milestone 2A (PostgreSQL Foundation)** and **Milestone 2B (Device Management API)**. Incidents, workers,
 AI, MQTT, and authentication remain future work. See the
 [blueprint](docs/OpsAI-Project-Blueprint.md) and [contributor rules](AGENTS.md).
 
@@ -160,10 +160,12 @@ fails startup without echoing connection strings.
 - `cmd/api`: entry point, dependency wiring, and graceful shutdown.
 - `internal/config`: environment configuration and validation.
 - `internal/platform/logging`: structured `log/slog` logging.
-- `internal/platform/database`: connection pool and startup connectivity check.
+- `internal/device`: device model, validation, service, and repository interface.
+- `internal/platform/database`: connection pool, startup checks, and device repository.
+- `internal/platform/database/dbgen`: generated sqlc queries.
 - `internal/transport/http`: handlers, envelopes, readiness interface, and server.
 - `db/migrations`: reversible Goose SQL migrations.
-- `db/sqlc.yaml` and `db/queries`: future query generation configuration.
+- `db/sqlc.yaml` and `db/queries`: device SQL and query generation configuration.
 
 A pool reuses a bounded set of database connections across requests. This pool
 allows 10 connections, a five-minute idle limit, and a one-hour lifetime. HTTP
@@ -176,10 +178,96 @@ that method. HTTP unit tests need no database. `context.Context` carries cancell
 and deadlines; `defer pool.Close()` releases the pool after HTTP shutdown. The
 `internal` directory restricts these packages' import scope.
 
-sqlc selects PostgreSQL and `pgx/v5`; the query directory intentionally contains no
-SQL, and no code is generated. sqlc is not needed to build or test Milestone 2A.
-After adding queries in a future task, use `sqlc generate -f db/sqlc.yaml`.
-An empty query directory is not yet a complete generation input.
+sqlc generates pgx/v5 code from the existing migration and named queries. Install
+its pinned development CLI locally (no new runtime dependency):
+
+```powershell
+$previousGoBin = $env:GOBIN
+try {
+    $env:GOBIN = Join-Path (Get-Location) 'bin'
+    go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
+    if ($LASTEXITCODE -ne 0) { throw 'sqlc installation failed.' }
+} finally {
+    $env:GOBIN = $previousGoBin
+}
+.\bin\sqlc.exe generate -f db/sqlc.yaml
+```
+
+Generated files are committed under `internal/platform/database/dbgen`; do not edit
+them manually. There are no `go:generate` directives. The original devices migration
+is unchanged. The service owns validation and depends on a small repository
+interface, allowing unit tests to use in-memory test doubles. The PostgreSQL
+repository converts driver types and errors at its boundary.
+
+## Device API (Milestone 2B)
+
+Start PostgreSQL, apply migrations, and start the API using the setup above.
+These PowerShell examples operate only on the device created in the first command:
+
+```powershell
+$base = 'http://127.0.0.1:8080/api/v1/devices'
+$body = @{
+    name = 'AMR-07'
+    type = 'amr'
+    location = 'Assembly line 1'
+    metadata = @{ manufacturer = 'Example' }
+} | ConvertTo-Json -Depth 10
+$created = Invoke-RestMethod -Method Post -Uri $base -ContentType 'application/json' -Body $body
+$deviceId = $created.data.id
+Invoke-RestMethod -Method Get -Uri $base
+Invoke-RestMethod -Method Get -Uri "$base/$deviceId"
+$patch = @{ status = 'online'; location = $null } | ConvertTo-Json
+Invoke-RestMethod -Method Patch -Uri "$base/$deviceId" -ContentType 'application/json' -Body $patch
+Invoke-WebRequest -Method Delete -Uri "$base/$deviceId" -UseBasicParsing
+```
+
+| Method | Path | Success |
+| --- | --- | --- |
+| POST | `/api/v1/devices` | 201, device in `data`, and `Location` header |
+| GET | `/api/v1/devices` | 200, array in `data` (empty array when none) |
+| GET | `/api/v1/devices/{id}` | 200, device in `data` |
+| PATCH | `/api/v1/devices/{id}` | 200, updated device in `data` |
+| DELETE | `/api/v1/devices/{id}` | 204, no response body |
+
+Creation requires nonblank `name` (up to 200 characters) and `type` (up to 50).
+Optional `status` is nonblank text up to 50 characters, defaulting to `unknown`.
+`location` is nullable text up to 500 characters. `metadata` is a JSON object up
+to 16 KiB, defaulting to `{}`. NUL characters are rejected. Request bodies are
+limited to 64 KiB. IDs must use the standard hyphenated UUID format. The service
+generates random UUID v4 IDs; clients cannot set IDs or timestamps.
+
+The schema has no enum constraints: suggested types include `amr`, `conveyor`,
+`plc`, `robot`, and `other`, but other nonblank values are accepted. These length
+limits are application rules; the existing database TEXT columns remain unchanged.
+
+PATCH requires at least one field, preserves omitted fields, and accepts null only
+for `location`. Supplied metadata replaces the entire object. Updates set
+`updated_at` in a single SQL statement; simultaneous changes to different fields
+do not overwrite omitted fields. Changes to the same field use the last update.
+Lists are ordered by creation time then ID; pagination is not implemented.
+
+Malformed JSON, multiple JSON values, unknown fields, wrong field types, invalid
+IDs, and validation failures return 400 `VALIDATION_ERROR`. Missing devices return
+404 `NOT_FOUND`; uniqueness violations return 409 `CONFLICT`; unexpected storage
+failures return 500 `INTERNAL_ERROR`. Errors use the existing `error` envelope and
+never contain database error text. The only unique constraint is the server-generated
+primary key, so duplicate device names are allowed. Unsupported methods return 405.
+Each device operation has a five-second context deadline.
+
+Run the separate repository integration test against a migrated local database:
+
+```powershell
+$env:OPSAI_TEST_DATABASE_URL = $env:DATABASE_URL
+try {
+    go test -tags=integration ./internal/platform/database -run TestDeviceRepositoryIntegration -count=1
+} finally {
+    Remove-Item Env:OPSAI_TEST_DATABASE_URL
+}
+```
+
+The test requires the explicit `integration` build tag and environment variable.
+It checks CRUD, partial updates, missing records, and uniqueness mapping inside a
+transaction which is rolled back. Normal `go test ./...` needs no database.
 
 ## Validation
 
