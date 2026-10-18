@@ -107,3 +107,31 @@ API changes. Cloud publication and synchronization require a separate user reque
 - Never silently ignore errors.
 - If requirements conflict or important information is missing, stop and ask
   before making a major assumption.
+
+## Public repository hygiene
+
+- Treat every tracked file as publicly readable, including documentation, scripts,
+  API collections, saved responses, fixtures, screenshots, and generated reports.
+- Use repository-relative paths or clearly generic example paths in new documentation.
+  Do not add personal workstation paths, private workspace names, account/tenant
+  identifiers, internal hostnames, or private resource links unless they are needed
+  for the project and explicitly approved for publication. Existing public project
+  identifiers such as the Go module path are intentional and should be preserved.
+- Prefer links to versioned local API files over links to a contributor's personal
+  Postman workspace. Collection/request IDs are not credentials; preserve existing
+  IDs needed for stable tooling, but do not copy them into prose unnecessarily.
+- Before adding API exports or examples, inspect authorization fields, headers,
+  cookies, URL query parameters, variables, scripts, and saved response bodies for
+  secrets or real user/customer data. Use synthetic data and localhost/example URLs.
+- Never embed access tokens, signed URLs, private keys, real passwords, or connection
+  strings with real credentials in tracked files. Document environment variable
+  names and hidden input prompts instead. Keep local logs and reports ignored.
+- Before a requested commit, review the exact staged diff and new files for sensitive
+  content and verify that local credentials and build artifacts remain excluded.
+  An ignore rule does not protect a file already tracked by Git.
+- If sensitive content is found, report its location and category without repeating
+  the value. Removing it from the working tree does not remove it from Git history.
+  For an exposed real credential, recommend revocation/rotation; do not rewrite
+  history, force-push, or change external credentials without explicit authorization.
+- State the scope of any safety review. Do not describe a documentation review or
+  pattern search as a complete repository/history secrets audit.

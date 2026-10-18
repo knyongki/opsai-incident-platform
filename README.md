@@ -315,9 +315,8 @@ Build artifacts and API logs
 remain in ignored `bin/`. Use `-ChecksOnly` for formatting, vet, unit tests, and
 Compose configuration checks without starting services or running Postman.
 
-The collection came from [OpsAI API in Postman](https://go.postman.co/collection/18505628-b1822baf-458d-4614-b5c3-a56844ba4a88)
-in My Workspace (`0ba5a650-d0b9-4074-80d8-1a655028ee1f`). Its collection/request
-IDs and existing device folders are preserved. Only **System** runs automatically:
+The versioned Postman collection is stored in
+`api/postman/opsai.postman_collection.json`. Only **System** runs automatically:
 GET `/health` and GET `/ready`, checking HTTP status, JSON content type, and exact
 success envelopes. The device requests are saved for later work and are not part
 of this automation. Readiness proves connectivity, not migration state; Goose
