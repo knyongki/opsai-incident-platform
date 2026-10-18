@@ -3,11 +3,18 @@
 ## Scope
 
 Read `docs/OpsAI-Project-Blueprint.md` completely before changing the project.
-Current scope includes Milestone 1 and Milestone 2A: PostgreSQL foundation only.
-Milestone 2A allows PostgreSQL Compose setup, pgx/v5 pooling, database readiness,
-Goose migrations for the devices table, and sqlc configuration. Do not add device
-HTTP endpoints or queries, incidents, workers, AI, MQTT, authentication, or later
-features without an explicit new user request.
+Current scope includes Milestone 1 (Go API foundation), Milestone 2A (PostgreSQL
+foundation), Milestone 2B (device management), and local validation automation.
+Milestone 2A includes PostgreSQL Compose setup, pgx/v5 pooling, database readiness,
+Goose migrations for the devices table, and sqlc configuration. Milestone 2B
+includes device create, list, get, update, and delete endpoints, domain validation,
+repository queries, generated sqlc code, and unit/handler/repository integration tests.
+Local automation includes the versioned Postman collection, the PowerShell runner,
+and setup documentation. Automated Postman execution currently covers only the
+System folder (health and readiness); preserve the saved device folders.
+Milestone 3/3A is not yet authorized. Do not add incidents, workers, AI, MQTT,
+authentication, cloud synchronization, CI workflows, or later features without
+an explicit new user request. The blueprint is a roadmap, not blanket authorization.
 
 ## Architecture
 
@@ -15,13 +22,19 @@ features without an explicit new user request.
 - `cmd/api` wires configuration, logging, HTTP startup, and shutdown.
 - `internal/config` loads and validates environment configuration.
 - `internal/platform/logging` constructs `log/slog` structured logging.
-- `internal/platform/database` owns PostgreSQL pool construction and startup checks.
-- `db/migrations` holds Goose migrations; `db/sqlc.yaml` configures future queries.
+- `internal/device` owns device models, validation, service logic, and the repository interface.
+- `internal/platform/database` owns PostgreSQL pooling, startup checks, and the device repository.
+- `db/migrations` holds Goose migrations; `db/queries` holds SQL queries and
+  `db/sqlc.yaml` configures generation into `internal/platform/database/dbgen`.
+  Regenerate sqlc output rather than editing generated files manually.
 - `internal/transport/http` owns handlers, JSON envelopes, and HTTP server settings.
+- `api/postman/opsai.postman_collection.json` is the versioned local API collection.
+- `scripts/check-local.ps1` runs local validation; `docs/Local-Automation-Setup.md`
+  documents setup on another Windows device.
 - Prefer idiomatic Go and the standard library. Ask before adding third-party dependencies.
   The user has authorized pgx/v5, Goose, and sqlc for the PostgreSQL foundation.
 - Keep architecture simple; introduce interfaces only where a consumer needs one.
-- Future domain/service code must remain independent of transport and providers.
+- Domain/service code must remain independent of transport and providers.
 - Pass contexts across operations and use bounded timeouts at process boundaries.
 - Return consistent JSON success/error envelopes; test HTTP behavior with `httptest`.
 - Explain important Go concepts briefly for the learner.
@@ -43,9 +56,35 @@ Fix problems introduced by the changes. Review tracked diffs and new files for
 secrets, unnecessary files, and scope violations. Report changed files, decisions,
 actual validation results, assumptions/issues, and the next small task. Never
 claim an unexecuted or failed check passed.
-Set the documented local example environment before Compose checks. Keep unit
-tests independent of PostgreSQL. If Docker is available, verify container health,
-migration status, and live API readiness. Report unavailable tools and unrun checks.
+Use the documented example environment for configuration-only Compose checks.
+For live checks, preserve configured local credentials; never replace an existing
+database password with the example value. Keep unit tests independent of PostgreSQL.
+For runtime, database, or automation changes, verify container health, migration
+status, and live API readiness when the required tools and credentials are available.
+Report unavailable tools and unrun checks. Documentation-only changes need a diff
+and consistency review, not a database startup.
+
+Use the local runner from a terminal with DATABASE_URL configured securely:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-local.ps1
+```
+
+The runner defaults to PostgreSQL on localhost:5432 and a temporary API on
+localhost:18080. It preserves existing container configuration with --no-recreate,
+applies forward migrations, runs the Postman System folder, stops its own API,
+and leaves PostgreSQL running. It does not load .env or publish collection changes.
+Follow docs/Local-Automation-Setup.md for prerequisites and hidden credential input.
+Never ask the user to paste credentials into chat.
+
+Use -ChecksOnly for formatting, vet, unit tests, and Compose configuration checks
+without starting services. The runner checks formatting but does not run gofmt -w
+or go mod tidy; it does not replace those required steps after Go changes.
+Device repository integration tests are separate: use the explicit integration
+build tag and OPSAI_TEST_DATABASE_URL as documented in README.md. A passing System
+folder does not establish device API or repository integration coverage.
+Preserve collection/request IDs and review related local collection changes with
+API changes. Cloud publication and synchronization require a separate user request.
 
 ## Safety
 
