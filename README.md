@@ -8,6 +8,9 @@ AI, MQTT, and authentication remain future work. See the
 
 ## Local setup (PowerShell)
 
+Setting up another computer? Follow the [new-device automation guide](docs/Local-Automation-Setup.md)
+for prerequisites, hidden password entry, one-command checks, and troubleshooting.
+
 Prerequisites: Go 1.26.5 or newer and Docker Desktop running Linux containers
 with Docker Compose. Run commands from the repository root. No system-wide tool
 installation or PATH changes are needed. All values below are public local
@@ -270,6 +273,61 @@ It checks CRUD, partial updates, missing records, and uniqueness mapping inside 
 transaction which is rolled back. Normal `go test ./...` needs no database.
 
 ## Validation
+
+### One-command local validation (PowerShell)
+
+With Go, Docker Desktop, Postman CLI, and the project-local Goose installed,
+run this in the terminal where you configured `DATABASE_URL` for your existing
+local PostgreSQL on port **5432** (see local setup above). Use its actual local
+credentials, not the example password if your database was initialized differently:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-local.ps1
+```
+
+The runner checks formatting without rewriting files, runs `go vet` and unit
+tests, validates Compose, starts PostgreSQL, applies forward migrations, checks
+migration status, builds a temporary API, and runs the **System** folder from
+[the versioned Postman collection](api/postman/opsai.postman_collection.json).
+It fails on command errors or failed assertions. No tools are installed by the
+runner. Postman CLI 1.75.0 was used to validate the command options.
+The execution-policy override applies only to this PowerShell process; it does
+not change your machine's execution policy.
+
+It preserves configured database credentials from the process environment and
+uses `.env.example` defaults for missing settings. Full runs require an explicitly
+configured `DATABASE_URL`; the runner never substitutes the example connection
+string for your database. It does not read `.env` or print the connection string.
+Temporary environment changes are restored afterward. The API binds
+to `127.0.0.1:18080` to avoid the usual development port; an occupied port fails
+the run. PostgreSQL uses the existing Compose project and port 5432. The runner
+starts/reuses the container with `--no-recreate` to preserve its configuration.
+The connection string must target localhost and match `-DatabasePort` (5432 by
+default). Forward migrations apply to this database; no rollback or volume
+deletion runs. For a fresh container, configure the POSTGRES variables to match
+your connection string before running.
+
+The temporary API is stopped in `finally`, including after a test failure.
+On Windows this terminates the owned test process; it does not test graceful
+shutdown. PostgreSQL stays running for reuse. Use the existing safe stop
+instructions when you want to stop it.
+Build artifacts and API logs
+remain in ignored `bin/`. Use `-ChecksOnly` for formatting, vet, unit tests, and
+Compose configuration checks without starting services or running Postman.
+
+The collection came from [OpsAI API in Postman](https://go.postman.co/collection/18505628-b1822baf-458d-4614-b5c3-a56844ba4a88)
+in My Workspace (`0ba5a650-d0b9-4074-80d8-1a655028ee1f`). Its collection/request
+IDs and existing device folders are preserved. Only **System** runs automatically:
+GET `/health` and GET `/ready`, checking HTTP status, JSON content type, and exact
+success envelopes. The device requests are saved for later work and are not part
+of this automation. Readiness proves connectivity, not migration state; Goose
+checks that separately. Unit tests continue to work without PostgreSQL.
+
+Edit this local collection alongside related API changes and review both in Git.
+The runner uses a local file and disables run-event reporting. It does not push
+collection edits to Postman or configure GitHub Actions. Import the JSON manually
+when needed; automatic synchronization with the existing cloud collection is a
+separate next step. No Postman API key is required for this local workflow.
 
 ```powershell
 gofmt -w cmd internal

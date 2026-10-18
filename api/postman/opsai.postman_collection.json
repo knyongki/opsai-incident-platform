@@ -1,0 +1,551 @@
+{
+  "info": {
+    "_postman_id": "b1822baf-458d-4614-b5c3-a56844ba4a88",
+    "name": "OpsAI API",
+    "description": "Postman collection for local OpsAI health, readiness, and device API testing. Run requests in order so Create Device stores device_id for later requests.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "System",
+      "item": [
+        {
+          "name": "Health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Response is JSON', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json'));",
+                  "pm.test('Status is ok', () => pm.expect(pm.response.json().data.status).to.eql('ok'));",
+                  "pm.test('Health envelope is correct', () => pm.expect(pm.response.json()).to.deep.eql({data: {status: 'ok'}}));"
+                ],
+                "id": "59daad19-1e91-425e-b6e1-1dc2e43257e3"
+              }
+            }
+          ],
+          "id": "e9edffe8-606e-4d85-a42c-0273b2d1076e",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Checks whether the API process is running."
+          },
+          "response": []
+        },
+        {
+          "name": "Readiness",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Response is JSON', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json'));",
+                  "pm.test('Readiness envelope is correct', () => pm.expect(pm.response.json()).to.deep.eql({data: {status: 'ready'}}));"
+                ],
+                "id": "5ae64c80-d81f-4518-a194-f58cb3080b72"
+              }
+            }
+          ],
+          "id": "2006bedd-107b-4a0f-804f-0c4253fc87e5",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/ready",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "ready"
+              ]
+            },
+            "description": "Checks whether the API and PostgreSQL dependency are ready."
+          },
+          "response": []
+        }
+      ],
+      "id": "9ad5aa7e-15e8-4af1-aa85-c7f29a4705fd"
+    },
+    {
+      "name": "Devices - Happy Path",
+      "item": [
+        {
+          "name": "Create Device",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+                  "pm.test('Response is JSON', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json'));",
+                  "const body = pm.response.json();",
+                  "const device = body.data || body;",
+                  "pm.test('Created device has an ID', () => pm.expect(device.id).to.be.a('string').and.not.empty);",
+                  "if (device.id) pm.collectionVariables.set('device_id', device.id);"
+                ],
+                "id": "ae2a1302-1f3f-4cd7-bb5f-569ce6af3f7f"
+              }
+            }
+          ],
+          "id": "8d7187d6-31e6-453e-9675-eb3935e1d182",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"AMR-07\",\n  \"type\": \"amr\",\n  \"location\": \"Warehouse A\",\n  \"status\": \"active\",\n  \"metadata\": {\n    \"manufacturer\": \"Demo Manufacturer\",\n    \"model\": \"AMR-X1\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/devices",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices"
+              ]
+            },
+            "description": "Creates a device and stores its returned UUID in the collection variable device_id."
+          },
+          "response": []
+        },
+        {
+          "name": "List Devices",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Response is JSON', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json'));",
+                  "pm.test('Response contains data', () => pm.expect(pm.response.json()).to.have.property('data'));"
+                ],
+                "id": "ad84bd64-a5ce-475e-a043-df8771656930"
+              }
+            }
+          ],
+          "id": "8c7ac51b-7185-48db-88d3-c8d1eaf4588a",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/devices",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices"
+              ]
+            },
+            "description": "Lists registered devices."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Device",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "const device = body.data || body;",
+                  "pm.test('Returned ID matches device_id', () => pm.expect(device.id).to.eql(pm.collectionVariables.get('device_id')));"
+                ],
+                "id": "e5d4e5c2-1e51-4387-b80c-9fe6f8a2e2b5"
+              }
+            }
+          ],
+          "id": "561a7471-552c-4013-9bd7-113ffca479d9",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/devices/{{device_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices",
+                "{{device_id}}"
+              ]
+            },
+            "description": "Gets the device created earlier in this collection."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Device",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "const device = body.data || body;",
+                  "pm.test('Device was updated', () => {",
+                  "  pm.expect(device.location).to.eql('Warehouse B');",
+                  "  pm.expect(device.status).to.eql('maintenance');",
+                  "});"
+                ],
+                "id": "12a9de6f-9f61-41a7-a745-bf18718f59ad"
+              }
+            }
+          ],
+          "id": "1ebe1c2b-55ee-48aa-9a2c-01e60375466b",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"location\": \"Warehouse B\",\n  \"status\": \"maintenance\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/devices/{{device_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices",
+                "{{device_id}}"
+              ]
+            },
+            "description": "Updates the location and status of the created device."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Device",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 204', () => pm.response.to.have.status(204));",
+                  "pm.test('Response body is empty', () => pm.expect(pm.response.text()).to.eql(''));"
+                ],
+                "id": "7a740569-9240-4a20-91e1-1d8fdab96160"
+              }
+            }
+          ],
+          "id": "280a929c-e395-4d9f-995d-9db448ba366c",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/devices/{{device_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices",
+                "{{device_id}}"
+              ]
+            },
+            "description": "Deletes the device created by this collection. Run this after the other device requests."
+          },
+          "response": []
+        },
+        {
+          "name": "Confirm Deleted Device",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 404', () => pm.response.to.have.status(404));",
+                  "pm.test('Uses error envelope', () => pm.expect(pm.response.json()).to.have.property('error'));"
+                ],
+                "id": "651fd7cf-0b35-4b69-928d-132aa82d56c0"
+              }
+            }
+          ],
+          "id": "689e30c4-5d39-4cf1-b39f-2c22dabbb09b",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/devices/{{device_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices",
+                "{{device_id}}"
+              ]
+            },
+            "description": "Confirms the deleted device is no longer found."
+          },
+          "response": []
+        }
+      ],
+      "id": "f270556a-dc3d-4ccc-9800-7a011ad1aad6"
+    },
+    {
+      "name": "Devices - Validation",
+      "item": [
+        {
+          "name": "Create Device - Malformed JSON",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Uses error envelope', () => pm.expect(pm.response.json()).to.have.property('error'));"
+                ],
+                "id": "1bfe81c5-ee6c-46d6-b83f-33284ad92f48"
+              }
+            }
+          ],
+          "id": "96a97785-9a0b-457d-a9a3-8e0a94a20793",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Broken JSON\",\n  \"type\": \"amr\"",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/devices",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create Device - Unknown Field",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Uses error envelope', () => pm.expect(pm.response.json()).to.have.property('error'));"
+                ],
+                "id": "d7a041de-6e2e-44b0-8001-533dd91f4f44"
+              }
+            }
+          ],
+          "id": "72dbe12c-947e-46b0-8369-d1df5410ba36",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"AMR-Invalid\",\n  \"type\": \"amr\",\n  \"unexpected_field\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/devices",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Device - Invalid UUID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Uses error envelope', () => pm.expect(pm.response.json()).to.have.property('error'));"
+                ],
+                "id": "7fd19639-5cc0-41db-a511-680a0fc7c953"
+              }
+            }
+          ],
+          "id": "5f42471b-2507-46ec-9c89-64295a68b569",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/devices/not-a-valid-uuid",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices",
+                "not-a-valid-uuid"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Device - Unknown UUID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 404', () => pm.response.to.have.status(404));",
+                  "pm.test('Uses error envelope', () => pm.expect(pm.response.json()).to.have.property('error'));"
+                ],
+                "id": "a73b5096-0ca9-41f4-901b-afaa1f83834d"
+              }
+            }
+          ],
+          "id": "2f14bc31-b252-4eb3-8473-b1004ec8c6b4",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/devices/00000000-0000-4000-8000-000000000000",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "devices",
+                "00000000-0000-4000-8000-000000000000"
+              ]
+            }
+          },
+          "response": []
+        }
+      ],
+      "id": "908acd88-1940-4f62-be38-4c8844683a6e"
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8080"
+    },
+    {
+      "key": "device_id",
+      "value": ""
+    }
+  ]
+}
