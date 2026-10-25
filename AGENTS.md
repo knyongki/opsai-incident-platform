@@ -2,7 +2,12 @@
 
 ## Scope
 
-Read `docs/OpsAI-Project-Blueprint.md` completely before changing the project.
+Read [the project blueprint](docs/OpsAI-Project-Blueprint.md) completely before
+changing the project. Use [the README](README.md) for implemented behavior and
+[the setup guide](docs/Local-Automation-Setup.md) for local commands.
+
+### Authorized work
+
 Current scope includes Milestone 1 (Go API foundation), Milestone 2A (PostgreSQL
 foundation), Milestone 2B (device management), and local validation automation.
 Milestone 2A includes PostgreSQL Compose setup, pgx/v5 pooling, database readiness,
@@ -12,9 +17,16 @@ repository queries, generated sqlc code, and unit/handler/repository integration
 Local automation includes the versioned Postman collection, the PowerShell runner,
 and setup documentation. Automated Postman execution currently covers only the
 System folder (health and readiness); preserve the saved device folders.
-Milestone 3/3A is not yet authorized. Do not add incidents, workers, AI, MQTT,
+Milestone 3A is authorized as defined in [active tasks](docs/Tasks.md#milestone-3a---in-review): incident creation
+and durable analysis-job enqueueing in one transaction, with tests and documentation.
+Do not add incident list/get/update endpoints, workers, AI, MQTT,
 authentication, cloud synchronization, CI workflows, or later features without
 an explicit new user request. The blueprint is a roadmap, not blanket authorization.
+
+Maintain status and active checklists in `docs/Tasks.md`. Finished milestones keep
+only their status and short outcome there; preserve lasting contracts in README
+and guides. Do not create separate milestone/progress files. Planned tasks are
+not authorization to implement later features.
 
 ## Architecture
 
@@ -23,14 +35,19 @@ an explicit new user request. The blueprint is a roadmap, not blanket authorizat
 - `internal/config` loads and validates environment configuration.
 - `internal/platform/logging` constructs `log/slog` structured logging.
 - `internal/device` owns device models, validation, service logic, and the repository interface.
-- `internal/platform/database` owns PostgreSQL pooling, startup checks, and the device repository.
+- `internal/incident` owns incident creation validation, service logic, and the atomic repository contract.
+- `internal/platform/database` owns PostgreSQL pooling, startup checks, and device/incident repositories.
 - `db/migrations` holds Goose migrations; `db/queries` holds SQL queries and
   `db/sqlc.yaml` configures generation into `internal/platform/database/dbgen`.
   Regenerate sqlc output rather than editing generated files manually.
 - `internal/transport/http` owns handlers, JSON envelopes, and HTTP server settings.
-- `api/postman/opsai.postman_collection.json` is the versioned local API collection.
-- `scripts/check-local.ps1` runs local validation; `docs/Local-Automation-Setup.md`
-  documents setup on another Windows device.
+- `api/postman/OpsAI API` is the versioned local API collection.
+- `scripts/start-local.ps1` starts PostgreSQL, migrations, and the API.
+- `scripts/check-local.ps1` runs local validation.
+- `scripts/local-environment.ps1` loads private local configuration for both scripts.
+
+## Go conventions
+
 - Prefer idiomatic Go and the standard library. Ask before adding third-party dependencies.
   The user has authorized pgx/v5, Goose, and sqlc for the PostgreSQL foundation.
 - Keep architecture simple; introduce interfaces only where a consumer needs one.
@@ -42,7 +59,11 @@ an explicit new user request. The blueprint is a roadmap, not blanket authorizat
 ## Workflow and validation
 
 Inspect repository status and preserve all existing files and uncommitted work.
-Give a short plan before implementation. Run these commands after Go changes:
+Give a short plan before implementation.
+
+### After Go changes
+
+Run these commands:
 
 ```text
 gofmt -w cmd internal
@@ -64,7 +85,18 @@ status, and live API readiness when the required tools and credentials are avail
 Report unavailable tools and unrun checks. Documentation-only changes need a diff
 and consistency review, not a database startup.
 
-Use the local runner from a terminal with DATABASE_URL configured securely:
+### Local startup and validation
+
+Configure private `.env` once with the same keys as `.env.example`, or securely
+configure `DATABASE_URL` and matching PostgreSQL settings in the terminal.
+
+| Task | Command after `powershell -NoProfile -ExecutionPolicy Bypass -File` |
+| --- | --- |
+| Start the API without tests | `scripts/start-local.ps1` |
+| Full local validation | `scripts/check-local.ps1` |
+| Checks without services or private configuration | `scripts/check-local.ps1 -ChecksOnly` |
+
+For example:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-local.ps1
@@ -73,22 +105,28 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-local.ps1
 The runner defaults to PostgreSQL on localhost:5432 and a temporary API on
 localhost:18080. It preserves existing container configuration with --no-recreate,
 applies forward migrations, runs the Postman System folder, stops its own API,
-and leaves PostgreSQL running. It does not load .env or publish collection changes.
-Follow docs/Local-Automation-Setup.md for prerequisites and hidden credential input.
+and leaves PostgreSQL running. It loads private .env through the shared literal
+parser; .env values take precedence over inherited settings. -ChecksOnly uses
+only safe example values. It does not publish collection changes.
+Use scripts/start-local.ps1 for startup without tests. Keep Go environment-based.
+Follow the [setup guide](docs/Local-Automation-Setup.md) for prerequisites and
+private configuration, and the [Postman quickstart](docs/Postman-Quickstart.md)
+for manual requests.
 Never ask the user to paste credentials into chat.
 
 Use -ChecksOnly for formatting, vet, unit tests, and Compose configuration checks
 without starting services. The runner checks formatting but does not run gofmt -w
 or go mod tidy; it does not replace those required steps after Go changes.
-Device repository integration tests are separate: use the explicit integration
+Device and incident repository integration tests are separate: use the explicit integration
 build tag and OPSAI_TEST_DATABASE_URL as documented in README.md. A passing System
 folder does not establish device API or repository integration coverage.
 Preserve collection/request IDs and review related local collection changes with
 API changes. Cloud publication and synchronization require a separate user request.
 
-## Safety
+## Safety and private configuration
 
-- Never create, print, or commit real secrets, credentials, API keys, or `.env` files.
+- Private Git-ignored `.env` files are allowed for local configuration. Never print,
+  stage, or commit their contents or real secrets. Never overwrite an existing .env.
 - Use only placeholder/example values in `.env.example`.
 - Do not delete or overwrite unrelated files.
 - Do not use destructive Git commands, including `git reset --hard`, force push,

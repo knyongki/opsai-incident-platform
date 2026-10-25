@@ -13,6 +13,7 @@ import (
 
 	"github.com/knyongki/opsai-incident-platform/internal/config"
 	"github.com/knyongki/opsai-incident-platform/internal/device"
+	"github.com/knyongki/opsai-incident-platform/internal/incident"
 	"github.com/knyongki/opsai-incident-platform/internal/platform/database"
 	"github.com/knyongki/opsai-incident-platform/internal/platform/logging"
 	httpapi "github.com/knyongki/opsai-incident-platform/internal/transport/http"
@@ -41,6 +42,7 @@ func run(bootstrapLogger *slog.Logger) error {
 	// serve waits for HTTP shutdown before this deferred cleanup runs.
 	defer pool.Close()
 	server := httpapi.NewServer(cfg.HTTPAddress, logger, pool, device.NewService(database.NewDeviceRepository(pool)))
+	server.Handler = httpapi.WithIncidents(logger, incident.NewService(database.NewIncidentRepository(pool)), server.Handler)
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
 		// Avoid including raw configuration values in startup errors.

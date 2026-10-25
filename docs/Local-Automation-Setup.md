@@ -1,45 +1,39 @@
-# Local automation on a new Windows device
+# Set up OpsAI on Windows
 
-This guide sets up the existing PowerShell validation workflow. It uses PostgreSQL
-on **127.0.0.1:5432**, a temporary API on **127.0.0.1:18080**, and the local
-Postman collection. It runs only the System folder (health and readiness).
-Cloud collection synchronization and GitHub Actions are not configured.
+This guide prepares a new device for one-command startup and local validation.
+Use Windows PowerShell in the project root.
 
-## 1. Prepare the tools and project
-
-Install these prerequisites yourself using their official instructions:
+## 1. Prepare the tools
 
 | Tool | Requirement |
 | --- | --- |
 | [Go](https://go.dev/doc/install) | Go 1.26.5 or newer, matching `go.mod` |
-| [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/) | Running, with Linux containers and Compose |
-| [Postman CLI](https://learning.postman.com/docs/postman-cli/postman-cli-installation/) | The `postman` terminal command; this workflow was validated with 1.75.0 |
-| Windows PowerShell | The runner uses Windows executables and process handling |
+| [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/) | Running Linux containers with Compose |
+| [Postman CLI](https://learning.postman.com/docs/postman-cli/postman-cli-installation/) | Required for full validation, not API startup; tested with 1.75.0 |
+| Windows PowerShell | Used by the startup and validation scripts |
 
-Clone the repository using your repository URL, or copy the project to the new
-device. Open PowerShell in its root folder. Replace the path below if needed:
+Clone or copy the project, then open a terminal in its root. Confirm the tools:
 
 ```powershell
-cd D:\Yongki\opsai-incident-platform
 go version
 docker version
 docker compose version
 postman --version
-Test-Path scripts/check-local.ps1
-Test-Path api/postman/opsai.postman_collection.json
+Test-Path scripts/start-local.ps1
+Test-Path 'api/postman/OpsAI API/.resources/definition.yaml'
 ```
 
-Both `Test-Path` commands must return `True`. Docker must report a server as well
-as a client. If a command is missing after installation, open a new terminal.
-Ensure your transferred checkout includes the automation files: uncommitted files
-from another computer will not appear in a fresh Git clone. Do not transfer `.env`,
-credentials, or `bin/`; rebuild local tools. A fresh checkout does not transfer
-the old computer's PostgreSQL data. This guide initializes schema, not a data restore.
+Docker must report a server as well as a client. Both file checks must return
+True. Open a new terminal after installing missing tools.
 
-## 2. Install Goose into the project
+A Git clone contains only committed files. It does not transfer private `.env`,
+local tools in `bin/`, or PostgreSQL data from another computer. This guide creates
+schema on a fresh database; it does not restore old data.
 
-Goose applies versioned SQL migrations. Install the already-approved, pinned CLI
-into ignored `bin/`, without changing your system PATH:
+## 2. Install project-local Goose
+
+Goose applies versioned SQL migrations. Install the pinned CLI into ignored
+`bin/`, without changing the system PATH:
 
 ```powershell
 $previousGoBin = $env:GOBIN
@@ -53,18 +47,127 @@ try {
 .\bin\goose.exe -version
 ```
 
-The first installation and run need network access for Go modules and the
-PostgreSQL image. sqlc is not required to run these checks because generated Go
-files are already included in the project.
+The first installation/run needs network access for Go modules and the PostgreSQL
+image. sqlc is not needed for startup because its generated Go files are included.
 
-## 3. Configure the database in this terminal
+## 3. Configure private .env once
 
-Use the following for a new local database named `opsai`, or an existing database
-with that name and user. For an existing database, enter its existing password.
-For a fresh database, choose a local development password and keep it privately
-for future sessions. Adjust the user/database values if your existing setup differs.
+Create it only if it does not exist:
 
-Copy this block exactly. Type the password only when the hidden prompt appears:
+```powershell
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+```
+
+Edit `.env` privately in your editor. Keep every key from `.env.example`, changing
+the values to match your local database.
+
+| Settings | What to configure |
+| --- | --- |
+| `HTTP_ADDRESS` | Normally `127.0.0.1:8080` |
+| `POSTGRES_PORT` | Normally `5432` |
+| `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | Your local database name, user, and password |
+| `DATABASE_URL` | Matching user, password, database, and port on localhost |
+| `APP_ENV`, `LOG_LEVEL` | Normally `development` and `INFO` |
+
+Connection URL format (placeholders only):
+
+```text
+postgres://USERNAME:PASSWORD@127.0.0.1:5432/DATABASE_NAME?sslmode=disable
+```
+
+URL-encode special characters in URL credentials, such as `@` as `%40` and
+`#` as `%23`. POSTGRES_PASSWORD keeps the original password. Do not put quotes
+around just the password inside the URL. `sslmode=disable` is for localhost only.
+
+The scripts support literal KEY=VALUE lines, blank lines, full-line comments,
+and optional quotes around the whole value. There is no interpolation, shell
+execution, multiline syntax, or inline-comment syntax. Use complete values,
+not references such as `DATABASE_URL=postgres://${POSTGRES_USER}:...`.
+
+Private `.env` values take precedence over inherited terminal values. Missing,
+duplicate, or unknown keys fail without printing values. The Go API itself reads
+environment variables; the scripts load the file into child-process environments.
+
+`.env` stays Git-ignored and contains plaintext local configuration. Never commit,
+print, or share it. Keep `.env.example` tracked with safe examples only. Verify:
+
+```powershell
+git check-ignore .env
+git ls-files -- .env
+```
+
+The first command should show `.env`; the second should show nothing.
+
+For an existing database, use its existing credentials. Compose initialization
+variables only affect an empty volume. Changing the file does not change an
+existing database password. The scripts reuse containers without recreating
+their configuration; do not delete volumes to resolve a mismatch.
+
+## 4. Start the project
+
+Start Docker Desktop, then run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-local.ps1
+```
+
+Startup validates Compose, starts/reuses PostgreSQL, waits for health, applies
+forward migrations, checks migration status, and runs the API. Wait for
+**API listening**, then follow the [Postman quickstart](Postman-Quickstart.md).
+Keep the terminal open; Ctrl+C stops the API. Startup does not require Postman CLI
+and does not run the test suite. The execution-policy override applies only to
+this PowerShell process.
+
+## 5. Run validation when needed
+
+Full validation:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-local.ps1
+```
+
+It checks Go formatting, runs vet and unit tests, validates Compose, starts/reuses
+PostgreSQL, applies forward migrations, and runs the Postman **System** folder
+against a temporary API on port 18080. That API stops afterward. PostgreSQL stays
+running; build artifacts and API logs remain in ignored `bin/`.
+
+Expect two requests, seven assertions, zero failures, and
+`Local validation passed`. Local Postman CLI may print cloud-login messages;
+the previously verified System run succeeded without login. Check the assertion
+summary and exit code. No automatic cloud synchronization or GitHub Actions run.
+
+For checks without services or private configuration:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-local.ps1 -ChecksOnly
+```
+
+This needs Go and Docker CLI, but no database, Goose, or Postman. It uses example
+configuration only. Repository integration tests are separate; see the README.
+A skipped integration test is not evidence that the transaction works.
+
+Parser tests, syntax checks, and ChecksOnly have passed. The full runner using
+private configuration also passed database health, migrations, readiness, and
+System assertions. A clean-device installation has not been independently tested.
+See [the task list](Tasks.md) for verification evidence and remaining review work.
+
+## 6. Stop safely
+
+Ctrl+C stops the API. To also stop PostgreSQL while preserving its data:
+
+```powershell
+docker compose --env-file .env.example stop postgres
+```
+
+Next time, open Docker Desktop and run the startup command again. Your private
+file persists, so you do not need to repeat credential setup. Never use
+`docker compose down -v` or Goose Down as routine cleanup.
+
+## Alternative: terminal-only configuration
+
+If you choose not to keep a private file, set the matching variables in your
+terminal before running the scripts. This setup lasts only for that terminal.
+The hidden password input below avoids putting the password in command history:
 
 ```powershell
 $env:POSTGRES_DB = 'opsai'
@@ -73,9 +176,7 @@ $env:POSTGRES_PORT = '5432'
 $passwordInput = Read-Host 'Enter local PostgreSQL password' -AsSecureString
 try {
     $env:POSTGRES_PASSWORD = [System.Net.NetworkCredential]::new('', $passwordInput).Password
-    if ([string]::IsNullOrWhiteSpace($env:POSTGRES_PASSWORD)) {
-        throw 'The database password must not be empty.'
-    }
+    if ([string]::IsNullOrWhiteSpace($env:POSTGRES_PASSWORD)) { throw 'Password must not be empty.' }
     $encodedUser = [Uri]::EscapeDataString($env:POSTGRES_USER)
     $encodedPassword = [Uri]::EscapeDataString($env:POSTGRES_PASSWORD)
     $encodedDatabase = [Uri]::EscapeDataString($env:POSTGRES_DB)
@@ -85,106 +186,21 @@ try {
 }
 ```
 
-The prompt text is just a label: do not replace it with a password or URL.
-Enter the password without surrounding quotation marks. URL encoding above
-handles special characters such as `@` and `#` automatically. The password is
-hidden during input, but the child processes necessarily receive the connection
-settings in their environment; this is not persistent encrypted storage.
-
-These variables last only for this terminal and its child processes. Repeat this
-step in a new terminal. Do not print `DATABASE_URL` or `POSTGRES_PASSWORD`, put
-them in chat, or save real values in tracked files. No `.env` file is required.
-`sslmode=disable` here is for the localhost development database only.
-
-The Compose initialization values create a user/database only for an empty
-volume. Changing them does not change a password in an existing volume. The
-runner reuses existing containers without recreating their configuration.
-It expects this repository's Compose service, not a separate native PostgreSQL
-installation that happens to occupy port 5432.
-
-## 4. Run the automation
-
-From the same configured terminal:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-local.ps1
-if ($LASTEXITCODE -ne 0) { throw 'Local validation failed; review the output above.' }
-```
-
-The policy override applies only to that child process. It does not change the
-machine's execution policy. Do not start another API on port 18080 first; the
-runner starts and stops its own temporary API.
-
-The runner performs these steps in order:
-
-1. Check Go formatting, run `go vet`, and run database-independent unit tests.
-2. Validate Compose and start/reuse PostgreSQL; wait for container health.
-3. Apply pending forward migrations and check migration status.
-4. Build and start the temporary API; wait for readiness.
-5. Run the Postman System folder and fail if requests/assertions fail.
-6. Stop the temporary API and restore temporary environment changes.
-
-Forward migrations modify the selected local database schema. The runner does
-not run Down migrations, delete volumes, or execute device requests. PostgreSQL
-stays running; build files and API logs remain in ignored `bin/`.
-
-## 5. Confirm success
-
-The validated run on the original device produced:
-
-- PostgreSQL healthy and accepting connections on port 5432.
-- `Goose up succeeded.` and `Goose status succeeded.`
-- Two Postman requests: `/health` and `/ready`, both HTTP 200.
-- Seven assertions executed, zero failed.
-- `Local validation passed: Go checks, database health, migrations, and Postman System assertions.`
-
-Postman CLI 1.75.0 may print `No authorization data found` and a message about
-credentials for publishing run details. In the verified local run these messages
-did not prevent execution or success. A Postman login/API key is not needed for
-this local-file workflow. Judge success by the assertion summary and exit code,
-not by the presence or absence of that message.
-
-This guide has been checked against the runner and the successful original-device
-output. A clean-machine installation has not been independently executed.
-
-## 6. Repeat checks and stop safely
-
-In the same configured terminal, repeat the command in step 4. In a new terminal,
-open the project folder and repeat step 3 first. Tools need installation only once
-per device/checkout, unless versions change.
-
-For formatting, vet, unit tests, and Compose validation only:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-local.ps1 -ChecksOnly
-```
-
-This mode needs Go and the Docker CLI, but no configured connection string,
-running database, Goose, or Postman. It does not prove live API readiness.
-
-To stop PostgreSQL without deleting its data:
-
-```powershell
-docker compose --env-file .env.example stop postgres
-```
-
-Closing the terminal clears its environment. The next full validation starts the
-database again. Never use `docker compose down -v` or Goose Down as routine cleanup.
+Enter the password at the prompt; do not replace the prompt label with credentials.
+If a private `.env` exists, its values still take precedence.
 
 ## Troubleshooting
 
-| Message or symptom | Action |
+| Symptom | Action |
 | --- | --- |
-| `Set DATABASE_URL in your terminal` | Repeat step 3 in the same terminal that launches the runner. Variables from another terminal are not inherited. |
-| `Goose up failed` | Verify the user, database, and existing password locally. Container health alone does not verify authentication. Do not delete the volume to fix credentials. |
-| Docker daemon unavailable | Start Docker Desktop, wait for its engine, and check `docker version`. |
-| Port 5432 already occupied | Check whether another PostgreSQL instance owns it. Preserve it; resolve which database to use before running. |
-| Port 18080 already occupied | Use `-ApiPort 18081` on the runner command. |
-| Need a different database port | Set `POSTGRES_PORT`, rebuild `DATABASE_URL` with that port, and pass matching `-DatabasePort`. An existing container's published port is not changed by `--no-recreate`. |
-| `postman` not recognized or unknown option | Check `postman --version` and `postman collection run --help`; use the official CLI installation instructions above. |
-| Local Goose missing | Repeat step 2; `bin/` is intentionally not transferred through Git. |
-| Formatting check failed | Run `gofmt -w cmd internal`, review the changes, then rerun. |
-| Temporary API exited or readiness timed out | Inspect ignored `bin/check-*.stderr.log` locally; check database credentials and connectivity. Redact any sensitive content before sharing logs. |
-
-The next optional task after a successful setup is reviewing a cloud sync or CI
-workflow. Running this script does not update the shared OpsAI API collection.
+| Missing database configuration | Complete step 3; confirm the file is named `.env`, not `.env.txt`. |
+| Invalid/missing/duplicate file key | Match the keys in `.env.example`; use literal values. |
+| Goose migration failed | Check existing database credentials and URL encoding locally. Do not delete the volume. |
+| Docker daemon unavailable | Start Docker Desktop and check `docker version`. |
+| Port 5432 occupied | Identify the existing PostgreSQL instance before changing anything. The scripts expect this repository's Compose service. |
+| API port 8080 occupied | Change HTTP_ADDRESS to another localhost port and update Postman's base_url. |
+| Validation port 18080 occupied | Pass `-ApiPort 18081` to check-local.ps1. |
+| Database port changed | Match POSTGRES_PORT and DATABASE_URL. Existing containers keep their published ports with --no-recreate. |
+| Missing Goose or Postman | Install the relevant tool using the steps above. |
+| Formatting check failed | Run `gofmt -w cmd internal`, review changes, then rerun. |
+| Temporary API exits | Inspect ignored `bin/check-*.stderr.log` locally; redact sensitive content before sharing. |

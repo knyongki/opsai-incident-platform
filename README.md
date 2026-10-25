@@ -2,107 +2,65 @@
 
 OpsAI is an AI-assisted incident-analysis platform for industrial equipment,
 written in Go. Implemented scope: **Milestone 1 (Go API Foundation)**,
-**Milestone 2A (PostgreSQL Foundation)** and **Milestone 2B (Device Management API)**. Incidents, workers,
-AI, MQTT, and authentication remain future work. See the
+**Milestone 2A (PostgreSQL Foundation)**, **Milestone 2B (Device Management API)**,
+and **Milestone 3A (Incident Creation and Durable Job Enqueueing)**. Workers,
+AI, incident read/update endpoints, MQTT, and authentication remain future work. See the
 [blueprint](docs/OpsAI-Project-Blueprint.md) and [contributor rules](AGENTS.md).
 
-## Local setup (PowerShell)
+## Start locally (PowerShell)
 
-Setting up another computer? Follow the [new-device automation guide](docs/Local-Automation-Setup.md)
-for prerequisites, hidden password entry, one-command checks, and troubleshooting.
+Run commands from the repository root. For a new computer, follow the
+[Windows setup guide](docs/Local-Automation-Setup.md) to install Go, Docker Desktop,
+and project-local Goose.
 
-Prerequisites: Go 1.26.5 or newer and Docker Desktop running Linux containers
-with Docker Compose. Run commands from the repository root. No system-wide tool
-installation or PATH changes are needed. All values below are public local
-examples, not production credentials.
+### First-time configuration
 
-### 1. Configure the current terminal
+Create a private configuration file only if it does not exist:
 
 ```powershell
-cd D:\Yongki\opsai-incident-platform
-$env:APP_ENV = 'development'
-$env:HTTP_ADDRESS = '127.0.0.1:8080'
-$env:LOG_LEVEL = 'INFO'
-$env:POSTGRES_DB = 'opsai'
-$env:POSTGRES_USER = 'opsai'
-$env:POSTGRES_PASSWORD = 'local-example-only'
-$env:POSTGRES_PORT = '5432'
-$env:DATABASE_URL = 'postgres://opsai:local-example-only@127.0.0.1:5432/opsai?sslmode=disable'
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-Variables apply only to this terminal and its children. Repeat this setup in a
-new terminal when running Compose, migrations, or the API. The API reads process
-variables, not `.env` files. `.env.example` documents safe values; keep `.env`
-ignored and never commit it. Do not print real connection strings or credentials.
-`sslmode=disable` is only for this localhost setup.
+Edit `.env` privately before starting. Keep the same keys as `.env.example`,
+with values matching your local database. Keep DATABASE_URL and POSTGRES settings
+consistent, including URL-encoding special characters in URL credentials.
+The file stays Git-ignored; never commit it or overwrite existing credentials.
 
-### 2. Start PostgreSQL and check health
+### Daily startup
+
+Open Docker Desktop, then run:
 
 ```powershell
-docker version
-docker compose version
-docker compose config --quiet
-docker compose up -d --wait --wait-timeout 90 postgres
-docker compose ps
-docker compose exec -T postgres pg_isready -U $env:POSTGRES_USER -d $env:POSTGRES_DB
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-local.ps1
 ```
 
-`config --quiet` validates without printing interpolated passwords. Wait for
-`healthy` in `compose ps`. PostgreSQL 17 binds to `127.0.0.1:5432` and stores data
-in the named `postgres_data` volume (prefixed by the Compose project name).
-`pg_isready` checks server health; the API additionally performs an authenticated
-`Ping` using `DATABASE_URL`.
+The script loads private `.env`, starts/reuses PostgreSQL, applies pending forward
+migrations, checks migration status, and runs the API. Defaults are PostgreSQL on
+**5432** and the API at **http://127.0.0.1:8080**. Keep the terminal open.
+Startup does not run tests or require Postman CLI.
 
-If port 5432 is occupied, set a free `POSTGRES_PORT` and update `DATABASE_URL` to
-match. For example, before starting PostgreSQL:
+Private file values override inherited terminal values. The scripts accept literal
+KEY=VALUE lines without interpolation; the Go API reads process environment
+variables. See the setup guide for syntax, terminal-only configuration, and
+troubleshooting.
+
+To send requests, follow the [Postman quickstart](docs/Postman-Quickstart.md).
+For automated checks, see [local validation](#local-validation).
+
+### Stop safely
+
+Press **Ctrl+C** to stop the API. PostgreSQL stays running. To stop it while
+preserving data:
 
 ```powershell
-$env:POSTGRES_PORT = '15432'
-$env:DATABASE_URL = 'postgres://opsai:local-example-only@127.0.0.1:15432/opsai?sslmode=disable'
+docker compose --env-file .env.example stop postgres
 ```
 
-Initialization variables apply only to an empty volume; changing them
-later does not rename users or change existing passwords. Do not delete the
-volume to resolve a configuration mismatch.
+Run the startup command again next time. Do not delete volumes or run Goose Down
+as routine cleanup. Existing database credentials are not changed by editing
+Compose initialization settings.
 
-### 3. Install local Goose and run migrations
-
-Goose is a development CLI, not an API runtime dependency. This pinned command
-installs to the ignored project `bin` directory and excludes unused drivers:
-
-```powershell
-$previousGoBin = $env:GOBIN
-try {
-    $env:GOBIN = Join-Path (Get-Location) 'bin'
-    go install -tags 'no_clickhouse,no_libsql,no_mssql,no_mysql,no_sqlite3,no_vertica,no_ydb' github.com/pressly/goose/v3/cmd/goose@v3.28.0
-    if ($LASTEXITCODE -ne 0) { throw 'Goose installation failed.' }
-} finally {
-    $env:GOBIN = $previousGoBin
-}
-.\bin\goose.exe -version
-$env:GOOSE_DRIVER = 'postgres'
-$env:GOOSE_DBSTRING = $env:DATABASE_URL
-.\bin\goose.exe -dir .\db\migrations status
-.\bin\goose.exe -dir .\db\migrations up
-if ($LASTEXITCODE -ne 0) { throw 'Migration failed; stop before starting the API.' }
-.\bin\goose.exe -dir .\db\migrations status
-```
-
-The first migration creates only `devices`: UUID primary key, required name and
-type, nullable location, default `unknown` status, JSONB metadata, and timestamps.
-Future application code supplies IDs; no UUID extension or automatic `updated_at`
-trigger is added. Goose records applied versions in its own table. The Down
-section reverses table creation but destroys its data; do not run it during normal
-setup or validation. The API does not apply migrations automatically.
-
-### 4. Start the API
-
-```powershell
-go run ./cmd/api
-```
-
-Startup must reach PostgreSQL within five seconds or exits with a sanitized error.
-The API listens on `127.0.0.1:8080`, logging JSON to standard error. In another terminal:
+### Health and readiness
 
 ```powershell
 curl.exe -i http://127.0.0.1:8080/health
@@ -120,29 +78,9 @@ Readiness checks connectivity, not schema/migration state. Both routes support
 HEAD without a response body. Application responses use `Content-Type: application/json`.
 Unknown paths return HTTP 404 with
 `{"error":{"code":"NOT_FOUND","message":"The requested resource was not found."}}`.
-Unsupported methods on known paths return HTTP 405 with the same error envelope
+Unsupported methods on these System paths return HTTP 405 with the same error envelope
 and `Allow: GET, HEAD`. Paths match exactly; `/health/` is not `/health`.
 Malformed HTTP rejected before routing uses Go's protocol-level responses.
-
-### 5. Stop safely
-
-Press Ctrl+C in the API terminal. SIGTERM also triggers shutdown on supported
-systems. HTTP requests have up to 10 seconds to drain before the database pool
-closes. In a terminal configured as in step 1:
-
-```powershell
-docker compose stop postgres
-```
-
-This retains the container and named volume. To restart:
-
-```powershell
-docker compose up -d --wait --wait-timeout 90 postgres
-```
-
-Never delete volumes as a normal stop/reset step. To test an outage, stop PostgreSQL
-while the API runs: `/health` stays 200 and `/ready` becomes 503. After restarting
-PostgreSQL, `/ready` should return 200 again.
 
 ## Configuration
 
@@ -164,11 +102,12 @@ fails startup without echoing connection strings.
 - `internal/config`: environment configuration and validation.
 - `internal/platform/logging`: structured `log/slog` logging.
 - `internal/device`: device model, validation, service, and repository interface.
-- `internal/platform/database`: connection pool, startup checks, and device repository.
+- `internal/incident`: incident input validation, creation service, and atomic repository contract.
+- `internal/platform/database`: connection pool, startup checks, and device/incident repositories.
 - `internal/platform/database/dbgen`: generated sqlc queries.
 - `internal/transport/http`: handlers, envelopes, readiness interface, and server.
 - `db/migrations`: reversible Goose SQL migrations.
-- `db/sqlc.yaml` and `db/queries`: device SQL and query generation configuration.
+- `db/sqlc.yaml` and `db/queries`: device/incident SQL and query generation configuration.
 
 A pool reuses a bounded set of database connections across requests. This pool
 allows 10 connections, a five-minute idle limit, and a one-hour lifetime. HTTP
@@ -257,7 +196,12 @@ never contain database error text. The only unique constraint is the server-gene
 primary key, so duplicate device names are allowed. Unsupported methods return 405.
 Each device operation has a five-second context deadline.
 
-Run the separate repository integration test against a migrated local database:
+Run the separate repository integration test against a migrated local database.
+Set DATABASE_URL in the current terminal using the setup guide's
+[terminal-only instructions](docs/Local-Automation-Setup.md#alternative-terminal-only-configuration).
+The startup script loads private configuration only in its child process; it does
+not export DATABASE_URL back to your terminal.
+
 
 ```powershell
 $env:OPSAI_TEST_DATABASE_URL = $env:DATABASE_URL
@@ -272,74 +216,150 @@ The test requires the explicit `integration` build tag and environment variable.
 It checks CRUD, partial updates, missing records, and uniqueness mapping inside a
 transaction which is rolled back. Normal `go test ./...` needs no database.
 
-## Validation
+## Incident creation (Milestone 3A)
 
-### One-command local validation (PowerShell)
+`POST /api/v1/incidents` stores an incident and its initial analysis job in one
+PostgreSQL transaction. A transaction makes both inserts succeed together or
+roll back together; HTTP 202 is returned only after commit. SQL calls use the
+same transaction-bound sqlc instance. IDs are server-generated UUID v4 values.
+The service remains independent of HTTP and PostgreSQL.
 
-With Go, Docker Desktop, Postman CLI, and the project-local Goose installed,
-run this in the terminal where you configured `DATABASE_URL` for your existing
-local PostgreSQL on port **5432** (see local setup above). Use its actual local
-credentials, not the example password if your database was initialized differently:
+Migration `00002_create_incidents_and_analysis_jobs.sql` adds both tables without
+changing the devices migration. It adds severity/status checks, a nonnegative
+attempt count, device and incident foreign keys, one-job-per-incident uniqueness,
+a device-reference index, and an index of pending jobs by availability time.
+Deleting a device referenced by an incident now returns 409 `CONFLICT`.
+
+| Field | Contract |
+| --- | --- |
+| `device_id` | Required UUID of an existing device |
+| `title` | Required, nonblank, at most 200 Unicode characters |
+| `description` | Required, nonblank, at most 10,000 characters |
+| `severity` | Required: `low`, `medium`, `high`, or `critical` |
+| `alarm_code` | Optional/null; at most 100 characters |
+| `raw_logs` | Optional (defaults to `[]`); at most 100 strings of 1,000 characters each; null array/entries rejected |
+| `occurred_at` | Optional/null; RFC3339 timestamp with offset; normalized to UTC; future dates allowed |
+
+NUL and invalid UTF-8 text, unknown fields, malformed/multiple JSON values, and
+bodies larger than 256 KiB are rejected with 400 `VALIDATION_ERROR`. A missing
+device returns 404 `NOT_FOUND`; unexpected failures return a sanitized 500
+`INTERNAL_ERROR`. Other methods on this route return 405 with `Allow: POST`.
+Clients cannot supply IDs, status, attempt counts, or server timestamps.
+
+The response is `{"data":{"id":"INCIDENT_UUID","status":"open","analysis_status":"queued"}}`.
+`queued` means a job with stored status `pending` exists. No worker is running,
+so analysis does not begin yet. Repeating POST creates a new incident and job;
+idempotency is not implemented. Future retries will update the same job row;
+separate reanalysis history needs a later schema decision.
+
+From a terminal with DATABASE_URL configured using the
+[terminal-only instructions](docs/Local-Automation-Setup.md#alternative-terminal-only-configuration),
+matching any private `.env`, apply forward migrations and run
+System checks, then run both repository integration tests:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-local.ps1
+if ($LASTEXITCODE -ne 0) { throw 'Migration/System validation failed.' }
+$previousTestURL = $env:OPSAI_TEST_DATABASE_URL
+try {
+    $env:OPSAI_TEST_DATABASE_URL = $env:DATABASE_URL
+    go test -tags=integration ./internal/platform/database -run 'Test(Device|Incident)RepositoryIntegration' -count=1 -v
+    if ($LASTEXITCODE -ne 0) { throw 'Repository integration tests failed.' }
+} finally {
+    $env:OPSAI_TEST_DATABASE_URL = $previousTestURL
+    Remove-Variable previousTestURL
+}
+```
+
+These integration tests need both migrations applied. The incident test commits
+synthetic records and checks visibility from another connection, deliberately
+fails a job insert to prove rollback, rejects duplicate jobs, and verifies device
+deletion protection. Cleanup deletes only rows created by that test. Tests skip
+without the test URL; a skipped test is not evidence of transaction correctness.
+
+For a manual API check, start the API with `scripts/start-local.ps1` as shown above.
+In another terminal, use synthetic data (these records persist):
+
+```powershell
+$base = 'http://127.0.0.1:8080'
+$deviceBody = @{ name = 'Demo incident device'; type = 'amr' } | ConvertTo-Json
+$demoDevice = Invoke-RestMethod -Method Post -Uri "$base/api/v1/devices" -ContentType 'application/json' -Body $deviceBody
+$incidentBody = @{
+    device_id = $demoDevice.data.id
+    title = 'Demo docking failure'
+    description = 'Synthetic incident for local verification.'
+    severity = 'high'
+    raw_logs = @('Synthetic docking log')
+    occurred_at = '2026-09-14T09:30:00Z'
+} | ConvertTo-Json
+$response = Invoke-WebRequest -UseBasicParsing -Method Post -Uri "$base/api/v1/incidents" -ContentType 'application/json' -Body $incidentBody
+$response.StatusCode # 202
+$response.Content
+```
+
+The local Postman collection also has an **Incidents - Manual** folder. Run it
+explicitly; it creates its own device before the incident. Normal automation still
+runs only System:
+
+```powershell
+postman collection run 'api/postman/OpsAI API' -i 'Incidents - Manual' --env-var 'base_url=http://127.0.0.1:8080' --no-report-events
+```
+
+This creates a persistent device, incident, and job on each run. The folder uses
+incident_device_id independently of the device CRUD folder's device_id and cleanup.
+No incident delete endpoint exists, and device deletion is restricted afterward.
+Use the integration test for repeatable verification with automatic fixture cleanup.
+
+## Local validation
+
+With the [setup prerequisites](docs/Local-Automation-Setup.md) installed and private
+`.env` configured, run:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-local.ps1
 ```
 
-The runner checks formatting without rewriting files, runs `go vet` and unit
-tests, validates Compose, starts PostgreSQL, applies forward migrations, checks
-migration status, builds a temporary API, and runs the **System** folder from
-[the versioned Postman collection](api/postman/opsai.postman_collection.json).
-It fails on command errors or failed assertions. No tools are installed by the
-runner. Postman CLI 1.75.0 was used to validate the command options.
-The execution-policy override applies only to this PowerShell process; it does
-not change your machine's execution policy.
+The runner checks Go formatting, runs vet and unit tests, validates Compose,
+starts/reuses PostgreSQL with `--no-recreate`, applies forward migrations, checks
+migration status, and runs the Postman **System** folder against a temporary API
+on **127.0.0.1:18080**. It stops its own API afterward and leaves PostgreSQL running.
+The database port comes from POSTGRES_PORT (normally 5432), unless overridden with
+`-DatabasePort`; DATABASE_URL must match. Artifacts and logs remain in ignored
+`bin/`. The runner installs no tools and fails on command or assertion errors.
 
-It preserves configured database credentials from the process environment and
-uses `.env.example` defaults for missing settings. Full runs require an explicitly
-configured `DATABASE_URL`; the runner never substitutes the example connection
-string for your database. It does not read `.env` or print the connection string.
-Temporary environment changes are restored afterward. The API binds
-to `127.0.0.1:18080` to avoid the usual development port; an occupied port fails
-the run. PostgreSQL uses the existing Compose project and port 5432. The runner
-starts/reuses the container with `--no-recreate` to preserve its configuration.
-The connection string must target localhost and match `-DatabasePort` (5432 by
-default). Forward migrations apply to this database; no rollback or volume
-deletion runs. For a fresh container, configure the POSTGRES variables to match
-your connection string before running.
+To check without starting services or reading private configuration:
 
-The temporary API is stopped in `finally`, including after a test failure.
-On Windows this terminates the owned test process; it does not test graceful
-shutdown. PostgreSQL stays running for reuse. Use the existing safe stop
-instructions when you want to stop it.
-Build artifacts and API logs
-remain in ignored `bin/`. Use `-ChecksOnly` for formatting, vet, unit tests, and
-Compose configuration checks without starting services or running Postman.
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-local.ps1 -ChecksOnly
+```
 
-The versioned Postman collection is stored in
-`api/postman/opsai.postman_collection.json`. Only **System** runs automatically:
-GET `/health` and GET `/ready`, checking HTTP status, JSON content type, and exact
-success envelopes. The device requests are saved for later work and are not part
-of this automation. Readiness proves connectivity, not migration state; Goose
-checks that separately. Unit tests continue to work without PostgreSQL.
+The [versioned collection](api/postman/OpsAI%20API) includes
+System, device, and manual incident requests. Only System runs automatically:
+health and readiness status, JSON content type, and exact success envelopes.
+Readiness proves connectivity; Goose checks migrations separately. Repository
+integration tests require the explicit commands above.
 
-Edit this local collection alongside related API changes and review both in Git.
-The runner uses a local file and disables run-event reporting. It does not push
-collection edits to Postman or configure GitHub Actions. Import the JSON manually
-when needed; automatic synchronization with the existing cloud collection is a
-separate next step. No Postman API key is required for this local workflow.
+The runner uses the local collection and disables run-event reporting. It does
+not publish edits, synchronize with Postman, or configure CI. Preserve existing
+collection/request IDs; cloud synchronization requires an explicit request.
+
+After Go changes, also apply formatting and update module metadata:
 
 ```powershell
 gofmt -w cmd internal
 go mod tidy
 go vet ./...
 go test ./...
-docker compose config --quiet
+docker compose --env-file .env.example config --quiet
 ```
 
 Unit tests require no container. They cover configuration, logging, HTTP contracts,
 readiness success/failure and cancellation, and graceful HTTP shutdown. Database
 health, migrations, and live readiness must be checked separately using the setup
 commands; passing unit tests alone does not prove PostgreSQL connectivity.
+
+For milestone status, verification evidence, and remaining review work, see
+[the task list](docs/Tasks.md).
 
 References: [pgxpool](https://pkg.go.dev/github.com/jackc/pgx/v5/pgxpool),
 [Goose](https://pressly.github.io/goose/documentation/cli-commands/), and

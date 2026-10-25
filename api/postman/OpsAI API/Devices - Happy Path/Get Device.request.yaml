@@ -1,0 +1,14 @@
+$kind: http-request
+description: Gets the device created earlier in this collection.
+url: "{{base_url}}/api/v1/devices/{{device_id}}"
+method: GET
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Status is 200', () => pm.response.to.have.status(200));
+      const body = pm.response.json();
+      const device = body.data || body;
+      pm.test('Returned ID matches device_id', () => pm.expect(device.id).to.eql(pm.collectionVariables.get('device_id')));
+    language: text/javascript
+settings: {}
+order: 3000

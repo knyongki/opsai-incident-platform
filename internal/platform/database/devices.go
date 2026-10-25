@@ -108,6 +108,10 @@ func (r *DeviceRepository) Delete(ctx context.Context, id string) error {
 	}
 	count, err := r.queries.DeleteDevice(ctx, key)
 	if err != nil {
+		var pgerr *pgconn.PgError
+		if errors.As(err, &pgerr) && pgerr.Code == "23503" && pgerr.ConstraintName == "incidents_device_id_fkey" {
+			return device.ErrConflict
+		}
 		return storageError(err)
 	}
 	if count == 0 {

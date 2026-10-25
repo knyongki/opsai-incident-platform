@@ -1,0 +1,3 @@
+$kind: collection
+description: Run this folder in order to create its own device, then an incident and job. Uses incident_device_id independently of device CRUD. Records persist. Excluded from check-local.ps1.
+order: 4000

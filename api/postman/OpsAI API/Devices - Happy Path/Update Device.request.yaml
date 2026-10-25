@@ -1,0 +1,26 @@
+$kind: http-request
+description: Updates the location and status of the created device.
+url: "{{base_url}}/api/v1/devices/{{device_id}}"
+method: PATCH
+headers:
+  Content-Type: application/json
+body:
+  type: json
+  content: |-
+    {
+      "location": "Warehouse B",
+      "status": "maintenance"
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Status is 200', () => pm.response.to.have.status(200));
+      const body = pm.response.json();
+      const device = body.data || body;
+      pm.test('Device was updated', () => {
+        pm.expect(device.location).to.eql('Warehouse B');
+        pm.expect(device.status).to.eql('maintenance');
+      });
+    language: text/javascript
+settings: {}
+order: 4000

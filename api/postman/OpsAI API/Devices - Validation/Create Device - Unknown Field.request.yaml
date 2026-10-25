@@ -1,0 +1,21 @@
+$kind: http-request
+url: "{{base_url}}/api/v1/devices"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: json
+  content: |-
+    {
+      "name": "AMR-Invalid",
+      "type": "amr",
+      "unexpected_field": true
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Status is 400', () => pm.response.to.have.status(400));
+      pm.test('Uses error envelope', () => pm.expect(pm.response.json()).to.have.property('error'));
+    language: text/javascript
+settings: {}
+order: 2000

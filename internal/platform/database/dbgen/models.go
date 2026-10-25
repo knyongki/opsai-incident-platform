@@ -8,6 +8,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AnalysisJob struct {
+	ID           pgtype.UUID
+	IncidentID   pgtype.UUID
+	Status       string
+	AttemptCount int32
+	AvailableAt  pgtype.Timestamptz
+	LockedAt     pgtype.Timestamptz
+	LastError    pgtype.Text
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+}
+
 type Device struct {
 	ID        pgtype.UUID
 	Name      string
@@ -17,4 +29,19 @@ type Device struct {
 	Metadata  []byte
 	CreatedAt pgtype.Timestamptz
 	UpdatedAt pgtype.Timestamptz
+}
+
+type Incident struct {
+	ID          pgtype.UUID
+	DeviceID    pgtype.UUID
+	Title       string
+	Description string
+	AlarmCode   pgtype.Text
+	Severity    string
+	Status      string
+	RawLogs     []string
+	OccurredAt  pgtype.Timestamptz
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+	ResolvedAt  pgtype.Timestamptz
 }

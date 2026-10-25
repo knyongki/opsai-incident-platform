@@ -1,0 +1,30 @@
+$kind: http-request
+description: Creates a dedicated device for incident tests. This device and its incidents persist after the run.
+url: '{{base_url}}/api/v1/devices'
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: json
+  content: |-
+    {
+      "name": "Demo incident test device",
+      "type": "amr"
+    }
+scripts:
+  - type: beforeRequest
+    code: |-
+      pm.collectionVariables.unset('incident_device_id');
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('Status is 201', () => pm.response.to.have.status(201));
+      pm.test('Response is JSON', () => pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json'));
+      pm.test('Save dedicated incident device ID', () => {
+        pm.response.to.have.status(201);
+        const id = pm.response.json().data.id;
+        pm.expect(id).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+        pm.collectionVariables.set('incident_device_id', id);
+      });
+    language: text/javascript
+order: 1000

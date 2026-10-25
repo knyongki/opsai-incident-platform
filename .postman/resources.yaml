@@ -1,0 +1,13 @@
+# Use this workspace to collaborate
+workspace:
+  id: ""
+
+localResources:
+  collections:
+    - ../api/postman/OpsAI API
+
+# Each entry here maps a local resource to one or more corresponding objects in Postman Cloud
+
+cloudResources:
+  collections:
+    ../api/postman/OpsAI API: 18505628-b1822baf-458d-4614-b5c3-a56844ba4a88

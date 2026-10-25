@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [switch]$ChecksOnly,
+    [switch]$StartApi,
     [ValidateRange(1024, 65535)][int]$ApiPort = 18080,
     [ValidateRange(1024, 65535)][int]$DatabasePort = 5432
 )
@@ -10,6 +11,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $previousEnvironment = @{}
 $apiProcess = $null
+. (Join-Path $PSScriptRoot 'local-environment.ps1')
 
 function Invoke-Checked {
     param([string]$Program, [string[]]$Arguments)
@@ -46,28 +48,31 @@ function Invoke-Migration {
 
 Push-Location $root
 try {
-    # Preserve configured values; use public examples only for missing settings.
-    $configuration = @{}
-    foreach ($line in Get-Content (Join-Path $root '.env.example')) {
-        if ($line -match '^([A-Z_]+)=(.*)$') { $configuration[$Matches[1]] = $Matches[2] }
-    }
-    foreach ($key in @($configuration.Keys)) {
-        $configured = [Environment]::GetEnvironmentVariable($key, 'Process')
-        if (-not [string]::IsNullOrWhiteSpace($configured)) { $configuration[$key] = $configured }
+    if ($StartApi -and $ChecksOnly) { throw 'StartApi and ChecksOnly cannot be combined.' }
+    $configuration = Read-LocalEnvironment -Root $root -ExamplesOnly:$ChecksOnly
+    if (-not $PSBoundParameters.ContainsKey('DatabasePort')) {
+        $parsedPort = 0
+        if (-not [int]::TryParse($configuration.POSTGRES_PORT, [ref]$parsedPort) -or $parsedPort -lt 1024 -or $parsedPort -gt 65535) { throw 'Invalid POSTGRES_PORT.' }
+        $DatabasePort = $parsedPort
     }
     if (-not $ChecksOnly) {
-        if ([string]::IsNullOrWhiteSpace($env:DATABASE_URL)) {
+        if ([string]::IsNullOrWhiteSpace($configuration.DATABASE_URL)) {
             throw 'Set DATABASE_URL in your terminal to your existing local PostgreSQL connection before running. Never paste it into chat or commit it.'
         }
         $databaseUri = $null
-        if (-not [Uri]::TryCreate($env:DATABASE_URL, [UriKind]::Absolute, [ref]$databaseUri) -or
+        if (-not [Uri]::TryCreate($configuration.DATABASE_URL, [UriKind]::Absolute, [ref]$databaseUri) -or
             $databaseUri.Scheme -notin @('postgres', 'postgresql') -or
             $databaseUri.Host -notin @('localhost', '127.0.0.1', '[::1]') -or
-            ($databaseUri.Port -ne -1 -and $databaseUri.Port -ne $DatabasePort)) {
+            ($databaseUri.Port -ne -1 -and $databaseUri.Port -ne $DatabasePort) -or
+            ($databaseUri.Port -eq -1 -and $DatabasePort -ne 5432)) {
             throw 'DATABASE_URL must target localhost and match DatabasePort (default 5432).'
         }
     }
-    $configuration.HTTP_ADDRESS = "127.0.0.1:$ApiPort"
+    if ($StartApi) {
+        if ($configuration.HTTP_ADDRESS -notmatch '^(127\.0\.0\.1|localhost):([0-9]+)$') { throw 'Local startup requires HTTP_ADDRESS on localhost.' }
+        $ApiPort = [int]$Matches[2]
+        if ($ApiPort -lt 1024 -or $ApiPort -gt 65535) { throw 'Invalid local API port.' }
+    } else { $configuration.HTTP_ADDRESS = "127.0.0.1:$ApiPort" }
     $configuration.POSTGRES_PORT = "$DatabasePort"
     $configuration.GOOSE_DRIVER = 'postgres'
     $configuration.GOOSE_DBSTRING = $configuration.DATABASE_URL
@@ -77,19 +82,27 @@ try {
     }
 
     foreach ($command in @('go', 'docker')) { $null = Get-Command $command -ErrorAction Stop }
-    Write-Host 'Checking Go formatting, static analysis, unit tests, and Compose configuration...'
-    $unformatted = & gofmt -l cmd internal
-    if ($LASTEXITCODE -ne 0) { throw 'gofmt failed.' }
-    if ($unformatted) { throw 'Go formatting needs attention. Run: gofmt -w cmd internal' }
-    Invoke-Checked go @('vet', './...')
-    Invoke-Checked go @('test', './...')
+    if (-not $StartApi) {
+        Write-Host 'Checking Go formatting, static analysis, unit tests, and Compose configuration...'
+        $unformatted = & gofmt -l cmd internal
+        if ($LASTEXITCODE -ne 0) { throw 'gofmt failed.' }
+        if ($unformatted) { throw 'Go formatting needs attention. Run: gofmt -w cmd internal' }
+        Invoke-Checked go @('vet', './...')
+        Invoke-Checked go @('test', './...')
+    }
     Invoke-Checked docker @('compose', '--env-file', '.env.example', 'config', '--quiet')
     if ($ChecksOnly) {
         Write-Host 'Static and unit checks passed. Live checks were explicitly skipped.'
         return
     }
 
-    $null = Get-Command postman -ErrorAction Stop
+    if (-not $StartApi) {
+        $null = Get-Command postman -ErrorAction Stop
+        if (-not (Test-Path 'api/postman/OpsAI API/.resources/definition.yaml')) {
+            throw 'Missing local YAML collection: api/postman/OpsAI API.'
+        }
+        Invoke-Checked postman @('collection', 'lint', 'api/postman/OpsAI API')
+    }
     $goose = Join-Path $root 'bin/goose.exe'
     if (-not (Test-Path $goose)) { throw 'Install project-local Goose using the README instructions first.' }
     # Refuse to test an unrelated API that is already listening on this port.
@@ -101,6 +114,12 @@ try {
     Invoke-Checked docker @('compose', '--env-file', '.env.example', 'exec', '-T', 'postgres', 'pg_isready')
     Invoke-Migration up
     Invoke-Migration status
+
+    if ($StartApi) {
+        Write-Host "Starting OpsAI on localhost:$ApiPort. Press Ctrl+C to stop the API."
+        Invoke-Checked go @('run', './cmd/api')
+        return
+    }
 
     $runId = [Guid]::NewGuid().ToString('N')
     $binary = Join-Path $root "bin/opsai-check-$runId.exe"
@@ -125,9 +144,9 @@ try {
     }
     if (-not $ready) { throw 'API readiness did not succeed within 30 seconds.' }
 
-    Invoke-Checked postman @('collection', 'run', 'api/postman/opsai.postman_collection.json',
+    Invoke-Checked postman @('collection', 'run', 'api/postman/OpsAI API',
         '-i', 'System', '--env-var', "base_url=$baseUrl", '--no-report-events',
-        '--timeout', '30000', '--timeout-request', '5000', '--timeout-script', '5000', '--ignore-redirects')
+        '--timeout', '30000', '--timeout-request', '5000', '--ignore-redirects')
     Write-Host 'Local validation passed: Go checks, database health, migrations, and Postman System assertions.'
 } finally {
     try {
