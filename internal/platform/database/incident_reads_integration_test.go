@@ -160,7 +160,6 @@ func TestIncidentReadsIntegration(t *testing.T) {
 		if err != nil || len(result.Items) != 0 {
 			t.Fatal("alarm filter is not exact")
 		}
-		// Pagination must keep the same combined filter predicates.
 		first, err := svc.List(ctx, incident.ListOptions{Limit: 1, Filters: incident.Filters{DeviceID: d.ID, Severity: "high"}})
 		if err != nil || !first.Page.HasMore {
 			t.Fatal("filtered first page")

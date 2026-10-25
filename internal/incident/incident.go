@@ -41,7 +41,7 @@ type Result struct {
 	AnalysisStatus string `json:"analysis_status"`
 }
 
-// Repository atomically persists an incident and its initial job before returning.
+// Repository reads incidents; Create commits the incident and initial job together.
 type Repository interface {
 	Create(context.Context, Creation) (Result, error)
 	List(context.Context, ListQuery) ([]Summary, error)

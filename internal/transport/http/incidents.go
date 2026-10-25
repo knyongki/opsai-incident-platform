@@ -23,7 +23,6 @@ type IncidentService interface {
 	Get(context.Context, string) (incident.Detail, error)
 }
 
-// WithIncidents handles incident creation and read-only collection/detail routes.
 func WithIncidents(logger *slog.Logger, svc IncidentService, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		const path = "/api/v1/incidents"

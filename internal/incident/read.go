@@ -67,7 +67,6 @@ type cursorPayload struct {
 	FilterHash string   `json:"filters"`
 }
 
-// ValidID uses the same UUID syntax for creation, filters, and detail paths.
 func ValidID(id string) bool { return validID(id) }
 
 func validateFilters(f Filters) error {

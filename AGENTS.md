@@ -59,6 +59,20 @@ not authorization to implement later features.
 - Return consistent JSON success/error envelopes; test HTTP behavior with `httptest`.
 - Explain important Go concepts briefly for the learner.
 
+## Code comments
+
+- Remove needless comments that repeat names, obvious statements, or code flow.
+  Prefer clear names and simple code over explanatory clutter.
+- Keep concise comments that explain intent, invariants, non-obvious behavior,
+  security constraints, ownership, or a deliberate tradeoff. Keep useful package
+  and API documentation; explain beginner concepts in docs or review notes.
+- Update or remove stale comments when behavior changes. Do not remove useful
+  context merely to reduce the comment count.
+- Preserve compiler/build directives, Goose and sqlc annotations, generated-file
+  notices, and license/copyright notices. Never hand-edit generated code.
+- Apply this review to Go, tests, scripts, SQL, and Postman scripts. Comment cleanup
+  must not change runtime behavior or remove required tooling metadata.
+
 ## Workflow and validation
 
 Inspect repository status and preserve all existing files and uncommitted work.
