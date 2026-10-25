@@ -8,9 +8,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/knyongki/opsai-incident-platform/internal/incident"
+	"github.com/knyongki/opsai-incident-platform/internal/platform/database/dbgen"
 )
 
-type failingBeginner struct{}
+type failingBeginner struct{ dbgen.DBTX }
 
 func (failingBeginner) Begin(context.Context) (pgx.Tx, error) {
 	return nil, errors.New("sensitive driver text")

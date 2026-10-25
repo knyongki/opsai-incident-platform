@@ -81,3 +81,124 @@ func (q *Queries) CreateIncident(ctx context.Context, arg CreateIncidentParams) 
 	)
 	return i, err
 }
+
+const getIncident = `-- name: GetIncident :one
+SELECT i.id, i.device_id, i.title, i.description, i.alarm_code, i.severity, i.status, i.raw_logs, i.occurred_at, i.created_at, i.updated_at, i.resolved_at, j.status AS job_status
+FROM incidents i
+LEFT JOIN analysis_jobs j ON j.incident_id = i.id
+WHERE i.id = $1
+`
+
+type GetIncidentRow struct {
+	ID          pgtype.UUID
+	DeviceID    pgtype.UUID
+	Title       string
+	Description string
+	AlarmCode   pgtype.Text
+	Severity    string
+	Status      string
+	RawLogs     []string
+	OccurredAt  pgtype.Timestamptz
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+	ResolvedAt  pgtype.Timestamptz
+	JobStatus   pgtype.Text
+}
+
+func (q *Queries) GetIncident(ctx context.Context, id pgtype.UUID) (GetIncidentRow, error) {
+	row := q.db.QueryRow(ctx, getIncident, id)
+	var i GetIncidentRow
+	err := row.Scan(
+		&i.ID,
+		&i.DeviceID,
+		&i.Title,
+		&i.Description,
+		&i.AlarmCode,
+		&i.Severity,
+		&i.Status,
+		&i.RawLogs,
+		&i.OccurredAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ResolvedAt,
+		&i.JobStatus,
+	)
+	return i, err
+}
+
+const listIncidents = `-- name: ListIncidents :many
+SELECT i.id, i.device_id, i.title, i.alarm_code, i.severity, i.status,
+       i.occurred_at, i.created_at, i.updated_at, j.status AS job_status
+FROM incidents i
+LEFT JOIN analysis_jobs j ON j.incident_id = i.id
+WHERE ($1::uuid IS NULL OR i.device_id = $1)
+  AND ($2::text IS NULL OR i.status = $2)
+  AND ($3::text IS NULL OR i.severity = $3)
+  AND ($4::text IS NULL OR i.alarm_code = $4)
+  AND ($5::timestamptz IS NULL
+       OR (i.created_at, i.id) < ($5::timestamptz, $6::uuid))
+ORDER BY i.created_at DESC, i.id DESC
+LIMIT $7::int
+`
+
+type ListIncidentsParams struct {
+	DeviceID        pgtype.UUID
+	Status          pgtype.Text
+	Severity        pgtype.Text
+	AlarmCode       pgtype.Text
+	BeforeCreatedAt pgtype.Timestamptz
+	BeforeID        pgtype.UUID
+	RowLimit        int32
+}
+
+type ListIncidentsRow struct {
+	ID         pgtype.UUID
+	DeviceID   pgtype.UUID
+	Title      string
+	AlarmCode  pgtype.Text
+	Severity   string
+	Status     string
+	OccurredAt pgtype.Timestamptz
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+	JobStatus  pgtype.Text
+}
+
+func (q *Queries) ListIncidents(ctx context.Context, arg ListIncidentsParams) ([]ListIncidentsRow, error) {
+	rows, err := q.db.Query(ctx, listIncidents,
+		arg.DeviceID,
+		arg.Status,
+		arg.Severity,
+		arg.AlarmCode,
+		arg.BeforeCreatedAt,
+		arg.BeforeID,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListIncidentsRow
+	for rows.Next() {
+		var i ListIncidentsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.DeviceID,
+			&i.Title,
+			&i.AlarmCode,
+			&i.Severity,
+			&i.Status,
+			&i.OccurredAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.JobStatus,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

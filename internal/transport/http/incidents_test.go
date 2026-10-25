@@ -15,6 +15,7 @@ import (
 )
 
 type incidentStub struct {
+	IncidentService
 	calls   int
 	err     error
 	input   incident.Input
@@ -97,13 +98,13 @@ func TestIncidentRouting(t *testing.T) {
 	for _, tc := range []struct {
 		method, path string
 		status       int
-	}{{"GET", "/api/v1/incidents", 405}, {"POST", "/api/v1/incidents/", 404}, {"GET", "/health", 200}} {
+	}{{"PUT", "/api/v1/incidents", 405}, {"POST", "/api/v1/incidents/", 404}, {"GET", "/health", 200}} {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest(tc.method, tc.path, nil))
 		if w.Code != tc.status {
 			t.Fatalf("%s: %d", tc.path, w.Code)
 		}
-		if tc.status == 405 && w.Header().Get("Allow") != "POST" {
+		if tc.status == 405 && w.Header().Get("Allow") != "GET, POST" {
 			t.Fatal("Allow header")
 		}
 	}

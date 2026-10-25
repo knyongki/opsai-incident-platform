@@ -8,6 +8,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -16,42 +19,119 @@ import (
 
 type IncidentService interface {
 	Create(context.Context, incident.Input) (incident.Result, error)
+	List(context.Context, incident.ListOptions) (incident.ListResult, error)
+	Get(context.Context, string) (incident.Detail, error)
 }
 
-// WithIncidents adds the single authorized incident route to the existing handler.
+// WithIncidents handles incident creation and read-only collection/detail routes.
 func WithIncidents(logger *slog.Logger, svc IncidentService, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/incidents" {
+		const path = "/api/v1/incidents"
+		collection := r.URL.Path == path
+		id := strings.TrimPrefix(r.URL.Path, path+"/")
+		detail := strings.HasPrefix(r.URL.Path, path+"/") && id != "" && !strings.Contains(id, "/")
+		if !collection && !detail {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if r.Method != http.MethodPost {
-			w.Header().Set("Allow", "POST")
+		allowed := "GET"
+		if collection {
+			allowed = "GET, POST"
+		}
+		if r.Method != http.MethodGet && !(collection && r.Method == http.MethodPost) {
+			w.Header().Set("Allow", allowed)
 			writeJSON(logger, w, http.StatusMethodNotAllowed, errorResponse{apiError{Code: "METHOD_NOT_ALLOWED", Message: "The request method is not allowed."}})
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
-		in, err := decodeIncident(w, r)
-		var result incident.Result
-		if err == nil {
-			result, err = svc.Create(ctx, in)
+		var result any
+		var err error
+		status := http.StatusOK
+		switch {
+		case r.Method == http.MethodPost:
+			var in incident.Input
+			in, err = decodeIncident(w, r)
+			if err == nil {
+				result, err = svc.Create(ctx, in)
+			}
+			status = http.StatusAccepted
+		case collection:
+			var options incident.ListOptions
+			options, err = parseIncidentList(r.URL.RawQuery)
+			if err == nil {
+				result, err = svc.List(ctx, options)
+			}
+		default:
+			if r.URL.RawQuery != "" || !incident.ValidID(id) {
+				err = incident.ErrInvalid
+			} else {
+				result, err = svc.Get(ctx, id)
+			}
 		}
 		if err != nil {
-			status, code, message := http.StatusInternalServerError, "INTERNAL_ERROR", "An internal error occurred."
-			switch {
-			case errors.Is(err, incident.ErrInvalid):
-				status, code, message = http.StatusBadRequest, "VALIDATION_ERROR", "The request contains invalid incident fields."
-			case errors.Is(err, incident.ErrDeviceNotFound):
-				status, code, message = http.StatusNotFound, "NOT_FOUND", "The referenced device was not found."
-			default:
-				logger.Error("incident request failed", "error_code", code)
-			}
-			writeJSON(logger, w, status, errorResponse{apiError{Code: code, Message: message}})
+			incidentError(logger, w, err)
 			return
 		}
-		writeJSON(logger, w, http.StatusAccepted, successResponse{Data: result})
+		writeJSON(logger, w, status, successResponse{Data: result})
 	})
+}
+
+func incidentError(logger *slog.Logger, w http.ResponseWriter, err error) {
+	status, code, message := http.StatusInternalServerError, "INTERNAL_ERROR", "An internal error occurred."
+	switch {
+	case errors.Is(err, incident.ErrInvalid):
+		status, code, message = http.StatusBadRequest, "VALIDATION_ERROR", "The request contains invalid incident fields, query, or ID."
+	case errors.Is(err, incident.ErrDeviceNotFound):
+		status, code, message = http.StatusNotFound, "NOT_FOUND", "The referenced device was not found."
+	case errors.Is(err, incident.ErrNotFound):
+		status, code, message = http.StatusNotFound, "NOT_FOUND", "The incident was not found."
+	default:
+		logger.Error("incident request failed", "error_code", code)
+	}
+	writeJSON(logger, w, status, errorResponse{apiError{Code: code, Message: message}})
+}
+
+func parseIncidentList(raw string) (incident.ListOptions, error) {
+	options := incident.ListOptions{Limit: 20}
+	values, err := url.ParseQuery(raw)
+	if err != nil {
+		return options, incident.ErrInvalid
+	}
+	for key, entries := range values {
+		if len(entries) != 1 {
+			return options, incident.ErrInvalid
+		}
+		value := entries[0]
+		if value == "" && key != "alarm_code" {
+			return options, incident.ErrInvalid
+		}
+		switch key {
+		case "limit":
+			for _, c := range value {
+				if c < '0' || c > '9' {
+					return options, incident.ErrInvalid
+				}
+			}
+			options.Limit, err = strconv.Atoi(value)
+			if err != nil || options.Limit < 1 || options.Limit > 100 {
+				return options, incident.ErrInvalid
+			}
+		case "cursor":
+			options.Cursor = value
+		case "device_id":
+			options.DeviceID = value
+		case "status":
+			options.Status = value
+		case "severity":
+			options.Severity = value
+		case "alarm_code":
+			options.AlarmCode = &value
+		default:
+			return options, incident.ErrInvalid
+		}
+	}
+	return incident.ValidateList(options)
 }
 
 func decodeIncident(w http.ResponseWriter, r *http.Request) (incident.Input, error) {

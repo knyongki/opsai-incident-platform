@@ -34,15 +34,21 @@ collection's dedicated `incident_device_id`.
 | 2 | System / Readiness | 200; `data.status = ready` |
 | 3 | Incidents - Manual / Create Incident Test Device | 201; saves `incident_device_id` |
 | 4 | Incidents - Manual / Create Incident | 202; `status = open`, `analysis_status = queued` |
+| 5 | Incidents - Manual / List Incidents | 200; summary items and cursor page |
+| 6 | Incidents - Manual / List Incidents With Filters | 200; includes the created incident |
+| 7 | Incidents - Manual / Get Created Incident | 200; full description/logs and job status |
+| 8 | Incidents - Manual / Get Incident - Invalid UUID | 400; validation error |
+| 9 | Incidents - Manual / Get Incident - Missing | 404; missing incident |
 
 Inspect the test results after each request. The incident request checks status,
 JSON content type, and the response envelope, UUID, and status values.
 
-Run **Incidents - Manual** in order, or send its two requests individually in that
+Run **Incidents - Manual** in order, or send its seven requests individually in that
 order. It creates its own device, independent of the device CRUD folder and its
 cleanup. After an incident references a device, deleting that device returns
-**409 Conflict**. Cloud copies need an explicit synchronization before they contain
-these local edits.
+**409 Conflict**. The cloud collection now includes the 3B read requests following
+an explicitly requested sync. Refresh the collection to see them. Create Incident
+saves `incident_id` for the detail request. Future edits still require explicit sync.
 
 Incident requests create persistent records. Repeating POST creates another
 incident and job. `queued` means the job is stored; no worker or AI runs yet.

@@ -3,8 +3,9 @@
 OpsAI is an AI-assisted incident-analysis platform for industrial equipment,
 written in Go. Implemented scope: **Milestone 1 (Go API Foundation)**,
 **Milestone 2A (PostgreSQL Foundation)**, **Milestone 2B (Device Management API)**,
-and **Milestone 3A (Incident Creation and Durable Job Enqueueing)**. Workers,
-AI, incident read/update endpoints, MQTT, and authentication remain future work. See the
+**Milestone 3A (Incident Creation and Durable Job Enqueueing)**, and
+**Milestone 3B (Incident List and Detail APIs)**. Workers,
+AI, incident update endpoints, MQTT, and authentication remain future work. See the
 [blueprint](docs/OpsAI-Project-Blueprint.md) and [contributor rules](AGENTS.md).
 
 ## Start locally (PowerShell)
@@ -102,7 +103,7 @@ fails startup without echoing connection strings.
 - `internal/config`: environment configuration and validation.
 - `internal/platform/logging`: structured `log/slog` logging.
 - `internal/device`: device model, validation, service, and repository interface.
-- `internal/incident`: incident input validation, creation service, and atomic repository contract.
+- `internal/incident`: incident validation, creation/read services, cursor pagination, and repository contract.
 - `internal/platform/database`: connection pool, startup checks, and device/incident repositories.
 - `internal/platform/database/dbgen`: generated sqlc queries.
 - `internal/transport/http`: handlers, envelopes, readiness interface, and server.
@@ -243,7 +244,8 @@ Deleting a device referenced by an incident now returns 409 `CONFLICT`.
 NUL and invalid UTF-8 text, unknown fields, malformed/multiple JSON values, and
 bodies larger than 256 KiB are rejected with 400 `VALIDATION_ERROR`. A missing
 device returns 404 `NOT_FOUND`; unexpected failures return a sanitized 500
-`INTERNAL_ERROR`. Other methods on this route return 405 with `Allow: POST`.
+`INTERNAL_ERROR`. The collection route also supports GET (see below); other methods
+return 405 with `Allow: GET, POST`.
 Clients cannot supply IDs, status, attempt counts, or server timestamps.
 
 The response is `{"data":{"id":"INCIDENT_UUID","status":"open","analysis_status":"queued"}}`.
@@ -255,7 +257,7 @@ separate reanalysis history needs a later schema decision.
 From a terminal with DATABASE_URL configured using the
 [terminal-only instructions](docs/Local-Automation-Setup.md#alternative-terminal-only-configuration),
 matching any private `.env`, apply forward migrations and run
-System checks, then run both repository integration tests:
+System checks, then run device, incident creation, and incident read integration tests:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-local.ps1
@@ -263,7 +265,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Migration/System validation failed.' }
 $previousTestURL = $env:OPSAI_TEST_DATABASE_URL
 try {
     $env:OPSAI_TEST_DATABASE_URL = $env:DATABASE_URL
-    go test -tags=integration ./internal/platform/database -run 'Test(Device|Incident)RepositoryIntegration' -count=1 -v
+    go test -tags=integration ./internal/platform/database -run 'Test(DeviceRepository|IncidentRepository|IncidentReads)Integration' -count=1 -v
     if ($LASTEXITCODE -ne 0) { throw 'Repository integration tests failed.' }
 } finally {
     $env:OPSAI_TEST_DATABASE_URL = $previousTestURL
@@ -276,6 +278,8 @@ synthetic records and checks visibility from another connection, deliberately
 fails a job insert to prove rollback, rejects duplicate jobs, and verifies device
 deletion protection. Cleanup deletes only rows created by that test. Tests skip
 without the test URL; a skipped test is not evidence of transaction correctness.
+The read integration test uses rolled-back fixtures for timestamp ties, pagination,
+all filters, status mapping, complete detail, and missing incidents/jobs.
 
 For a manual API check, start the API with `scripts/start-local.ps1` as shown above.
 In another terminal, use synthetic data (these records persist):
@@ -309,6 +313,107 @@ This creates a persistent device, incident, and job on each run. The folder uses
 incident_device_id independently of the device CRUD folder's device_id and cleanup.
 No incident delete endpoint exists, and device deletion is restricted afterward.
 Use the integration test for repeatable verification with automatic fixture cleanup.
+
+## Incident reads (Milestone 3B)
+
+Both read endpoints return HTTP 200 in the existing `data` envelope and have a
+five-second operation timeout. They do not modify incidents or jobs.
+
+| Method and path | Result |
+| --- | --- |
+| `GET /api/v1/incidents` | `{ "data": { "items": [], "page": { "next_cursor": null, "has_more": false } } }` when empty |
+| `GET /api/v1/incidents/{id}` | Complete incident in `data`; invalid UUID returns 400, missing incident returns 404 |
+
+### List parameters and pagination
+
+| Parameter | Contract |
+| --- | --- |
+| `limit` | Decimal integer, default 20, range 1-100 |
+| `cursor` | Opaque `next_cursor` from the preceding page; omit for the first page |
+| `device_id` | Exact hyphenated UUID; UUID letter case is normalized |
+| `status` | Exact `open`, `analyzing`, `analyzed`, `analysis_failed`, or `resolved` |
+| `severity` | Exact `low`, `medium`, `high`, or `critical` |
+| `alarm_code` | Exact case-sensitive text, maximum 100 Unicode characters; NUL/invalid UTF-8 rejected |
+
+Filters combine with AND. Empty supplied values are invalid except `alarm_code=`:
+that matches a stored empty string, not NULL. Omit alarm_code to include all values.
+Malformed cursors, invalid filters/limits, duplicate parameters, unknown parameters,
+and malformed URL query encoding return 400 `VALIDATION_ERROR`. Detail accepts no
+query parameters. Unsupported methods return 405 (`Allow: GET` on detail).
+
+Rows are ordered by `created_at DESC, id DESC`. Each query fetches `limit + 1`
+summary rows; the extra row determines `has_more`. If true, `next_cursor` represents
+the last returned row. Otherwise it is null. Subsequent queries use the strict
+tuple boundary `(created_at, id) < (cursor timestamp, cursor UUID)`, with no offset.
+This tie-breaker prevents skipped or duplicated rows with equal timestamps.
+
+The versioned cursor is canonical JSON encoded with unpadded base64url. It holds
+the timestamp, UUID, and SHA-256 of normalized filters. Clients must treat it as
+opaque and resend the same filters; changed or omitted filters return 400.
+The page size may change. The cursor is not signed or an authorization token.
+It does not provide a database snapshot across requests: newly inserted rows ahead
+of the boundary require restarting from the first page, and changing filter fields
+can change membership between pages.
+
+### Response fields
+
+List items contain only `id`, `device_id`, `title`, `alarm_code`, `severity`,
+`status`, `analysis_status`, `occurred_at`, `created_at`, and `updated_at`.
+They omit description and raw logs. `items` is always an array.
+
+Detail adds `description`, `raw_logs`, and `resolved_at`. Optional alarm_code,
+occurred_at, and resolved_at serialize as JSON null when absent; raw_logs is an
+array, including `[]` when empty. Timestamps are returned in UTC.
+
+The existing job row supplies analysis_status: `pending` maps to `queued`;
+`running`, `completed`, and `failed` retain their names. No job IDs, attempt counts,
+lock timestamps, or internal errors are exposed. A missing/invalid job is treated
+as a storage invariant failure (sanitized 500 `INTERNAL_ERROR`), rather than hiding
+the incident. A nonexistent incident returns 404 `NOT_FOUND`.
+
+The sqlc queries `ListIncidents` and `GetIncident` read the existing tables with a
+left join to analysis_jobs. No schema migration or dependency was added. Existing
+indexes are sufficient for correctness; large datasets may need a measured index
+improvement later. Performance/load testing is not part of this milestone.
+
+### Try list and detail
+
+After creating an incident using the example above:
+
+```powershell
+$incidentId = ($response.Content | ConvertFrom-Json).data.id
+Invoke-RestMethod "$base/api/v1/incidents/$incidentId"
+$filters = "device_id=$($demoDevice.data.id)&status=open&severity=high"
+$firstPage = Invoke-RestMethod "$base/api/v1/incidents?limit=1&$filters"
+$firstPage.data.items
+if ($firstPage.data.page.has_more) {
+    $cursor = [Uri]::EscapeDataString($firstPage.data.page.next_cursor)
+    Invoke-RestMethod "$base/api/v1/incidents?limit=1&$filters&cursor=$cursor"
+}
+```
+
+Alternatively run the local **Incidents - Manual** Postman folder: its setup saves
+incident_id, then the read requests check list, combined filters, complete detail,
+invalid UUID, and a missing incident. The 3B requests were synchronized to the cloud
+collection on explicit request and fetched back for verification. Automatic
+validation continues to run only **System**; later edits are not automatically synced.
+
+To run all repository integration tests with private .env in an isolated process:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command {
+    $ErrorActionPreference = 'Stop'
+    . ./scripts/local-environment.ps1
+    $settings = Read-LocalEnvironment -Root (Get-Location).Path
+    $env:OPSAI_TEST_DATABASE_URL = $settings.DATABASE_URL
+    go test -tags=integration ./internal/platform/database `
+        -run 'Test(DeviceRepository|IncidentRepository|IncidentReads)Integration' -count=1 -v
+    exit $LASTEXITCODE
+}
+```
+
+PostgreSQL must be running with both existing migrations applied. Require all three
+tests to report PASS, not SKIP. Normal `go test ./...` remains database-independent.
 
 ## Local validation
 

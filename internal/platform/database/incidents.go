@@ -14,6 +14,7 @@ import (
 
 type transactionBeginner interface {
 	Begin(context.Context) (pgx.Tx, error)
+	dbgen.DBTX
 }
 type IncidentRepository struct{ db transactionBeginner }
 

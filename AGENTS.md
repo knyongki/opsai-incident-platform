@@ -17,9 +17,12 @@ repository queries, generated sqlc code, and unit/handler/repository integration
 Local automation includes the versioned Postman collection, the PowerShell runner,
 and setup documentation. Automated Postman execution currently covers only the
 System folder (health and readiness); preserve the saved device folders.
-Milestone 3A is authorized as defined in [active tasks](docs/Tasks.md#milestone-3a---in-review): incident creation
+Milestone 3A is complete: incident creation
 and durable analysis-job enqueueing in one transaction, with tests and documentation.
-Do not add incident list/get/update endpoints, workers, AI, MQTT,
+Milestone 3B is authorized in [active tasks](docs/Tasks.md): read-only incident
+list/detail, cursor pagination, exact filters, job-status mapping, tests, and local
+Postman/documentation updates. No migration without explicit approval.
+Do not add incident update endpoints, workers, AI, MQTT,
 authentication, cloud synchronization, CI workflows, or later features without
 an explicit new user request. The blueprint is a roadmap, not blanket authorization.
 

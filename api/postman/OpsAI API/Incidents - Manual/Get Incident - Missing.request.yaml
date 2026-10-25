@@ -1,0 +1,11 @@
+$kind: http-request
+description: Uses a synthetic UUID expected to be absent from the local test database.
+url: '{{base_url}}/api/v1/incidents/00000000-0000-4000-8000-000000000000'
+method: GET
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Status is 404', () => pm.response.to.have.status(404));
+      pm.test('Missing incident envelope', () => pm.expect(pm.response.json()).to.deep.eql({error:{code:'NOT_FOUND',message:'The incident was not found.'}}));
+    language: text/javascript
+order: 7000

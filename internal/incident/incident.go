@@ -16,6 +16,7 @@ var (
 	ErrInvalid        = errors.New("invalid incident input")
 	ErrDeviceNotFound = errors.New("referenced device not found")
 	ErrRepository     = errors.New("incident storage failure")
+	ErrNotFound       = errors.New("incident not found")
 )
 
 type Input struct {
@@ -43,6 +44,8 @@ type Result struct {
 // Repository atomically persists an incident and its initial job before returning.
 type Repository interface {
 	Create(context.Context, Creation) (Result, error)
+	List(context.Context, ListQuery) ([]Summary, error)
+	Get(context.Context, string) (Detail, error)
 }
 
 type Service struct{ repo Repository }

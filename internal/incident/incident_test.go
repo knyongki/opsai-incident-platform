@@ -13,6 +13,7 @@ func validInput() Input {
 }
 
 type fakeRepository struct {
+	Repository
 	calls    int
 	creation Creation
 	err      error
