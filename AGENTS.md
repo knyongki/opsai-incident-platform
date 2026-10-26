@@ -19,10 +19,15 @@ and setup documentation. Automated Postman execution currently covers only the
 System folder (health and readiness); preserve the saved device folders.
 Milestone 3A is complete: incident creation
 and durable analysis-job enqueueing in one transaction, with tests and documentation.
-Milestone 3B is authorized in [active tasks](docs/Tasks.md): read-only incident
+Milestone 3B is complete: read-only incident
 list/detail, cursor pagination, exact filters, job-status mapping, tests, and local
-Postman/documentation updates. No migration without explicit approval.
-Do not add incident update endpoints, workers, AI, MQTT,
+Postman/documentation updates. Milestone 4A is complete in [the task status](docs/Tasks.md):
+the separate fake worker, claim-token/lease migration 00003, bounded retries and
+recovery, tests, local configuration, and documentation. Implementation and this
+migration were approved together by the user's request to execute the plan.
+Future migrations still need explicit approval. Keep fake execution on a separate
+localhost database ending in _worker_test; incidents remain open and no analysis
+results are stored. Do not add incident update endpoints, real AI, MQTT,
 authentication, cloud synchronization, CI workflows, or later features without
 an explicit new user request. The blueprint is a roadmap, not blanket authorization.
 
@@ -35,6 +40,8 @@ not authorization to implement later features.
 
 - Module: `github.com/knyongki/opsai-incident-platform`.
 - `cmd/api` wires configuration, logging, HTTP startup, and shutdown.
+- `cmd/worker` wires the explicit fake worker and bounded shutdown.
+- `internal/worker` owns job processing, retry policy, and consumer-owned interfaces.
 - `internal/config` loads and validates environment configuration.
 - `internal/platform/logging` constructs `log/slog` structured logging.
 - `internal/device` owns device models, validation, service logic, and the repository interface.
@@ -46,8 +53,9 @@ not authorization to implement later features.
 - `internal/transport/http` owns handlers, JSON envelopes, and HTTP server settings.
 - `api/postman/OpsAI API` is the versioned local API collection.
 - `scripts/start-local.ps1` starts PostgreSQL, migrations, and the API.
+- `scripts/start-worker.ps1` starts only the fake worker; -MigrateOnly migrates its separate test database.
 - `scripts/check-local.ps1` runs local validation.
-- `scripts/local-environment.ps1` loads private local configuration for both scripts.
+- `scripts/local-environment.ps1` loads private local configuration for the local scripts.
 
 ## Go conventions
 
@@ -104,8 +112,10 @@ and consistency review, not a database startup.
 
 ### Local startup and validation
 
-Configure private `.env` once with the same keys as `.env.example`, or securely
+Configure private `.env` once with the required keys from `.env.example`, or securely
 configure `DATABASE_URL` and matching PostgreSQL settings in the terminal.
+New WORKER_/JOB_ keys are optional for existing API configurations. Worker mode and
+its separate WORKER_DATABASE_URL require explicit configuration.
 
 | Task | Command after `powershell -NoProfile -ExecutionPolicy Bypass -File` |
 | --- | --- |

@@ -84,8 +84,10 @@ and optional quotes around the whole value. There is no interpolation, shell
 execution, multiline syntax, or inline-comment syntax. Use complete values,
 not references such as `DATABASE_URL=postgres://${POSTGRES_USER}:...`.
 
-Private `.env` values take precedence over inherited terminal values. Missing,
-duplicate, or unknown keys fail without printing values. The Go API itself reads
+Private `.env` values take precedence over inherited terminal values. Missing
+required API/database keys, duplicate keys, or unknown keys fail without printing
+values. Optional WORKER_/JOB_ keys may be absent from older private files and use
+inherited settings or example defaults. Fake mode is disabled by default. The Go API itself reads
 environment variables; the scripts load the file into child-process environments.
 
 `.env` stays Git-ignored and contains plaintext local configuration. Never commit,
@@ -204,3 +206,82 @@ If a private `.env` exists, its values still take precedence.
 | Missing Goose or Postman | Install the relevant tool using the steps above. |
 | Formatting check failed | Run `gofmt -w cmd internal`, review changes, then rerun. |
 | Temporary API exits | Inspect ignored `bin/check-*.stderr.log` locally; redact sensitive content before sharing. |
+
+## Isolated fake worker (Milestone 4A)
+
+The API startup command is unchanged. The fake worker is a separate, explicit
+process and must not consume the normal development queue.
+
+1. Start the existing PostgreSQL container using normal API startup. Create a
+   dedicated database once, using the container's configured user:
+
+   ```powershell
+   docker compose --env-file .env.example exec -T postgres sh -c 'exec createdb -U "$POSTGRES_USER" opsai_worker_test'
+   ```
+
+   If that database already exists, use it only when it contains synthetic demo
+   records, or choose a new name ending in `_worker_test`. Do not delete an existing
+   database or volume. Database creation requires a role with CREATEDB permission.
+
+2. Add `WORKER_ANALYZER=fake` and `WORKER_DATABASE_URL` to private `.env`.
+   Use your existing local credentials and the separate database name in the URL.
+   Leave DATABASE_URL pointing to the normal API database. Other worker settings
+   are optional; see the [configuration table](../README.md#fake-worker-milestone-4a).
+   Explicit values in .env override terminal values, including blank values.
+
+3. Apply forward migrations to the separate database, then start the worker:
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-worker.ps1 -MigrateOnly
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-worker.ps1
+   ```
+
+   Migration output is suppressed to avoid exposing connection details.
+   If migration 00003 reports incompatible legacy job ownership, inspect job state
+   locally and review a recovery decision; do not reset rows automatically.
+
+4. Run a second API against that same test database in another terminal. This
+   isolated child process overrides only the API's runtime configuration:
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -Command {
+       $ErrorActionPreference = 'Stop'
+       . ./scripts/local-environment.ps1
+       $settings = Read-LocalEnvironment -Root (Get-Location).Path
+       if ([string]::IsNullOrWhiteSpace($settings.WORKER_DATABASE_URL)) {
+           throw 'Configure the separate worker database first.'
+       }
+       $env:DATABASE_URL = $settings.WORKER_DATABASE_URL
+       $env:HTTP_ADDRESS = '127.0.0.1:18082'
+       $env:LOG_LEVEL = $settings.LOG_LEVEL
+       go run ./cmd/api
+       exit $LASTEXITCODE
+   }
+   ```
+
+5. Set Postman base_url to `http://127.0.0.1:18082` and run Incidents - Manual.
+   POST still returns queued. Subsequent GET requests may show running/completed
+   while incident status stays open. Completed here means fake execution only.
+   Restore Postman's base_url to your usual API afterward.
+
+For a visible transition, set WORKER_FAKE_DELAY to 5s before starting the worker.
+Use transient-once to demonstrate a retry, permanent for terminal failure, or
+transient for attempt exhaustion. Keep delay below JOB_ATTEMPT_TIMEOUT unless
+testing timeouts. Restart workers after changing settings; use the same retry and
+lease settings in every worker process.
+
+For crash verification, create a synthetic incident, observe running, terminate
+only the worker process you launched, and start its replacement. It must wait for
+lease expiry, schedule retry, and finish on a later attempt. Ctrl+C is graceful
+cancellation and also leaves unfinished claims recoverable, but is not proof of
+abrupt-process-crash handling. For competition, start two worker terminals and
+submit several incidents; correlate job IDs/attempts in safe logs to check each
+lease has one owner. A stale process may still execute after expiry, but cannot
+write over a replacement's claim.
+
+Stop all workers before the [worker repository tests](../README.md#fake-worker-milestone-4a).
+They require an empty pending/running queue and clean up only their own fixtures.
+Use a fresh dedicated database for tests if a demo left pending work; never empty
+the normal development queue for testing. Test databases and demo records remain
+until you explicitly choose to remove them. No worker is started by check-local.ps1,
+and its automated Postman run remains System-only.

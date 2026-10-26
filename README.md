@@ -4,8 +4,10 @@ OpsAI is an AI-assisted incident-analysis platform for industrial equipment,
 written in Go. Implemented scope: **Milestone 1 (Go API Foundation)**,
 **Milestone 2A (PostgreSQL Foundation)**, **Milestone 2B (Device Management API)**,
 **Milestone 3A (Incident Creation and Durable Job Enqueueing)**, and
-**Milestone 3B (Incident List and Detail APIs)**. Workers,
-AI, incident update endpoints, MQTT, and authentication remain future work. See the
+**Milestone 3B (Incident List and Detail APIs)**, and
+**Milestone 4A (Durable Worker Foundation)**. The worker runs only a
+fake analyzer against a separate synthetic test database. Real AI, analysis results,
+incident update endpoints, MQTT, and authentication remain future work. See the
 [blueprint](docs/OpsAI-Project-Blueprint.md) and [contributor rules](AGENTS.md).
 
 ## Start locally (PowerShell)
@@ -22,10 +24,12 @@ Create a private configuration file only if it does not exist:
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-Edit `.env` privately before starting. Keep the same keys as `.env.example`,
+Edit `.env` privately before starting. Use the keys defined in `.env.example`,
 with values matching your local database. Keep DATABASE_URL and POSTGRES settings
 consistent, including URL-encoding special characters in URL credentials.
 The file stays Git-ignored; never commit it or overwrite existing credentials.
+Existing API keys remain required; new WORKER_/JOB_ settings are optional and use
+defaults when absent. Fake mode has no enabling default.
 
 ### Daily startup
 
@@ -100,6 +104,7 @@ fails startup without echoing connection strings.
 ## Architecture and Go concepts
 
 - `cmd/api`: entry point, dependency wiring, and graceful shutdown.
+- `cmd/worker` and `internal/worker`: separate fake worker, job policy, and consumer-owned repository/analyzer contracts.
 - `internal/config`: environment configuration and validation.
 - `internal/platform/logging`: structured `log/slog` logging.
 - `internal/device`: device model, validation, service, and repository interface.
@@ -249,9 +254,10 @@ return 405 with `Allow: GET, POST`.
 Clients cannot supply IDs, status, attempt counts, or server timestamps.
 
 The response is `{"data":{"id":"INCIDENT_UUID","status":"open","analysis_status":"queued"}}`.
-`queued` means a job with stored status `pending` exists. No worker is running,
-so analysis does not begin yet. Repeating POST creates a new incident and job;
-idempotency is not implemented. Future retries will update the same job row;
+`queued` means a job with stored status `pending` exists. Normal API startup does
+not start a worker. The explicit 4A fake worker uses a separate test database.
+Repeating POST creates a new incident and job;
+idempotency is not implemented. Worker retries update the same job row;
 separate reanalysis history needs a later schema decision.
 
 From a terminal with DATABASE_URL configured using the
@@ -273,7 +279,7 @@ try {
 }
 ```
 
-These integration tests need both migrations applied. The incident test commits
+These integration tests need all current migrations applied. The incident test commits
 synthetic records and checks visibility from another connection, deliberately
 fails a job insert to prove rollback, rejects duplicate jobs, and verifies device
 deletion protection. Cleanup deletes only rows created by that test. Tests skip
@@ -398,7 +404,7 @@ invalid UUID, and a missing incident. The 3B requests were synchronized to the c
 collection on explicit request and fetched back for verification. Automatic
 validation continues to run only **System**; later edits are not automatically synced.
 
-To run all repository integration tests with private .env in an isolated process:
+To run the device and incident repository integration tests with private .env in an isolated process:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command {
@@ -412,8 +418,86 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command {
 }
 ```
 
-PostgreSQL must be running with both existing migrations applied. Require all three
+PostgreSQL must be running with all current migrations applied. Require all three
 tests to report PASS, not SKIP. Normal `go test ./...` remains database-independent.
+
+## Fake worker (Milestone 4A)
+
+Use the [worker setup instructions](docs/Local-Automation-Setup.md#isolated-fake-worker-milestone-4a)
+to create and migrate a separate localhost database ending in `_worker_test`.
+Set private `WORKER_DATABASE_URL` to that database and explicitly set
+`WORKER_ANALYZER=fake`. The worker never falls back to DATABASE_URL.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-worker.ps1 -MigrateOnly
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-worker.ps1
+```
+
+The first command validates worker configuration and applies forward migrations
+to the separate worker database without starting work. The second runs one job
+at a time. Ctrl+C cancels active work and stops claiming. Start a second worker
+terminal only against the same synthetic database and with matching policy.
+Regular `start-local.ps1` remains API-only.
+
+Claims use short transactions and SKIP LOCKED. Migration 00003 adds a fresh UUID
+claim token, lease expiry, ownership constraint, and expired-running-job index.
+It rejects incompatible legacy ownership rather than resetting records.
+Analysis runs outside the transaction. Final writes require the current token
+and unexpired lease; expired or stale workers cannot overwrite newer owners.
+Recovery processes up to 100 expired/exhausted jobs per pass. All transition times
+come from PostgreSQL. Shutdown leaves unfinished claims for lease recovery.
+
+Delivery permits repeated execution after a crash; a claim consumes an attempt
+even if the process dies before analysis. Retries have a fixed cap, so successful
+processing is not guaranteed. No heartbeat or exactly-once guarantee exists.
+Storage failures use bounded backoff; uncertain completion is recovered rather
+than immediately re-executed.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| WORKER_ANALYZER | Empty; must explicitly be fake | Enables only the fake implementation |
+| WORKER_DATABASE_URL | Required for worker | Separate localhost database ending in _worker_test |
+| WORKER_FAKE_OUTCOME | success | success, transient, permanent, or transient-once |
+| WORKER_FAKE_DELAY | 100ms | Simulated work; cancellation-aware |
+| JOB_POLL_INTERVAL | 1s | Idle polling delay |
+| JOB_ATTEMPT_TIMEOUT | 30s | Analyzer deadline |
+| JOB_LEASE | 60s | Fixed ownership duration |
+| JOB_DATABASE_TIMEOUT | 5s | Bounded storage operation |
+| JOB_RETRY_BASE / JOB_RETRY_CAP | 2s / 60s | Capped exponential retry delay |
+| JOB_MAX_ATTEMPTS | 3 | Claim limit, 1-100 |
+| WORKER_SHUTDOWN_TIMEOUT | 10s | Maximum wait for cancellation |
+
+Policy durations must be 1ms-24h; fake delay may also be zero. Lease must exceed
+attempt timeout plus two database timeouts, and retry cap must be at least base.
+URLs allow only sslmode, connect_timeout, and application_name query parameters
+to prevent connection overrides bypassing the isolated-database check.
+
+Fake success moves only the job to completed. Incidents remain open; no analysis
+result is generated. Transient failures and attempt timeouts retry until the cap;
+permanent/unclassified failures stop immediately. The existing GET APIs show
+queued/running/completed/failed without exposing tokens, attempts, or errors.
+In this demo, completed means fake processing completed, not real findings.
+Safe error codes are stored internally; incident bodies and raw errors are not logged.
+
+Stop all workers before repository tests. Use an otherwise empty queue in a
+dedicated migrated test database; tests refuse to consume existing pending work:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command {
+    $ErrorActionPreference = 'Stop'
+    . ./scripts/local-environment.ps1
+    $settings = Read-LocalEnvironment -Root (Get-Location).Path
+    $env:OPSAI_TEST_DATABASE_URL = $settings.WORKER_DATABASE_URL
+    $env:OPSAI_WORKER_TEST_DATABASE_URL = $settings.WORKER_DATABASE_URL
+    go test -tags=integration ./internal/platform/database -count=1 -v
+    exit $LASTEXITCODE
+}
+```
+
+Require PASS rather than SKIP for device, incident creation/reads, job repository,
+and lease migration tests. Job tests use committed synthetic fixtures and separate
+connections; cleanup touches only their own records. Migration compatibility tests
+use isolated schemas rolled back afterward. Normal `go test ./...` needs no database.
 
 ## Local validation
 

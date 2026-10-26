@@ -51,7 +51,10 @@ an explicitly requested sync. Refresh the collection to see them. Create Inciden
 saves `incident_id` for the detail request. Future edits still require explicit sync.
 
 Incident requests create persistent records. Repeating POST creates another
-incident and job. `queued` means the job is stored; no worker or AI runs yet.
+incident and job. `queued` means the job is stored. Normal startup runs only the
+API. The optional [4A fake worker](../README.md#fake-worker-milestone-4a) runs
+against a separate test database and creates no AI findings. Detail assertions
+allow queued/running/completed/failed while incident status remains open.
 HTTP assertions do not replace the repository transaction integration tests.
 
 ## 4. Stop

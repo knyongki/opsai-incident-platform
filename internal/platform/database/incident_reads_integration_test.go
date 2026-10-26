@@ -80,7 +80,11 @@ func TestIncidentReadsIntegration(t *testing.T) {
 		if _, err := tx.Exec(ctx, "UPDATE incidents SET created_at=$2, updated_at=$2, status=$3 WHERE id=$1", id, created, statuses[i]); err != nil {
 			t.Fatal("incident fixture state failed")
 		}
-		if _, err := tx.Exec(ctx, "UPDATE analysis_jobs SET status=$2 WHERE incident_id=$1", id, jobs[i]); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE analysis_jobs SET status=$2,
+            claim_token=CASE WHEN $2='running' THEN id ELSE NULL END,
+            locked_at=CASE WHEN $2='running' THEN clock_timestamp() ELSE NULL END,
+            lease_expires_at=CASE WHEN $2='running' THEN clock_timestamp()+interval '1 minute' ELSE NULL END
+            WHERE incident_id=$1`, id, jobs[i]); err != nil {
 			t.Fatal("job fixture state failed")
 		}
 	}

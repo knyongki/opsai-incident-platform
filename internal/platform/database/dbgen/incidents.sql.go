@@ -12,7 +12,7 @@ import (
 )
 
 const createAnalysisJob = `-- name: CreateAnalysisJob :one
-INSERT INTO analysis_jobs (id, incident_id) VALUES ($1, $2) RETURNING id, incident_id, status, attempt_count, available_at, locked_at, last_error, created_at, updated_at
+INSERT INTO analysis_jobs (id, incident_id) VALUES ($1, $2) RETURNING id, incident_id, status, attempt_count, available_at, locked_at, last_error, created_at, updated_at, claim_token, lease_expires_at
 `
 
 type CreateAnalysisJobParams struct {
@@ -33,6 +33,8 @@ func (q *Queries) CreateAnalysisJob(ctx context.Context, arg CreateAnalysisJobPa
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ClaimToken,
+		&i.LeaseExpiresAt,
 	)
 	return i, err
 }

@@ -9,15 +9,17 @@ import (
 )
 
 type AnalysisJob struct {
-	ID           pgtype.UUID
-	IncidentID   pgtype.UUID
-	Status       string
-	AttemptCount int32
-	AvailableAt  pgtype.Timestamptz
-	LockedAt     pgtype.Timestamptz
-	LastError    pgtype.Text
-	CreatedAt    pgtype.Timestamptz
-	UpdatedAt    pgtype.Timestamptz
+	ID             pgtype.UUID
+	IncidentID     pgtype.UUID
+	Status         string
+	AttemptCount   int32
+	AvailableAt    pgtype.Timestamptz
+	LockedAt       pgtype.Timestamptz
+	LastError      pgtype.Text
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+	ClaimToken     pgtype.UUID
+	LeaseExpiresAt pgtype.Timestamptz
 }
 
 type Device struct {

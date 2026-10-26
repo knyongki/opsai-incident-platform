@@ -29,7 +29,9 @@ function Read-LocalEnvironment {
             $settings[$key] = $value
         }
         foreach ($key in $settings.Keys) {
-            if (-not $seen.ContainsKey($key)) { throw "Missing $key in .env; use the keys from .env.example." }
+            if (-not $seen.ContainsKey($key) -and $key -notmatch '^(WORKER_|JOB_)') {
+                throw "Missing $key in .env; use the keys from .env.example."
+            }
         }
     } elseif ([string]::IsNullOrWhiteSpace($env:DATABASE_URL)) {
         throw 'Configure private .env using .env.example, or set DATABASE_URL in this terminal.'
