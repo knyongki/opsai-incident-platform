@@ -7,7 +7,9 @@ written in Go. Implemented scope: **Milestone 1 (Go API Foundation)**,
 **Milestone 3B (Incident List and Detail APIs)**, and
 **Milestone 4A (Durable Worker Foundation)**. The worker runs only a
 fake analyzer against a separate synthetic test database. Real AI, analysis results,
-incident update endpoints, MQTT, and authentication remain future work. See the
+incident update endpoints, MQTT, and authentication remain future work.
+Milestone 4B.1 adds the standalone [analysis result contract](#analysis-result-contract-milestone-4b1)
+for later worker integration. See the
 [blueprint](docs/OpsAI-Project-Blueprint.md) and [contributor rules](AGENTS.md).
 
 ## Start locally (PowerShell)
@@ -498,6 +500,45 @@ Require PASS rather than SKIP for device, incident creation/reads, job repositor
 and lease migration tests. Job tests use committed synthetic fixtures and separate
 connections; cleanup touches only their own records. Migration compatibility tests
 use isolated schemas rolled back afterward. Normal `go test ./...` needs no database.
+
+## Analysis result contract (Milestone 4B.1)
+
+`internal/analysis` defines version 1 with standard-library-only types and validation.
+`Decode(data []byte, incidentID string) (Result, error)` accepts one complete JSON
+result. `Validate(result Result, incidentID string) error` checks typed values.
+Both return the sanitized `ErrInvalid` on rejection, without including input.
+Results are mutable: later persistence code must validate them again before storing.
+The current worker still completes without storing results; HTTP contracts are unchanged.
+
+All fields below are required, non-null, and use exactly the shown names.
+Empty arrays are allowed only where the minimum is zero; nil slices are invalid.
+
+| Field | Contract |
+| --- | --- |
+| `summary` | Nonblank string, at most 2,000 Unicode code points |
+| `primary_suspected_cause` | Nonblank string, at most 1,000 code points |
+| `contributing_factors` | 0–10 nonblank strings, at most 1,000 code points each |
+| `observed_conditions` | 1–10 strings with the same text limits |
+| `recommended_actions` | 0–10 objects containing exactly `order`, `description`, `reason` |
+| `safety_notes` | 1–10 strings with the same text limits |
+| `confidence` | Required finite number from 0 through 1, inclusive |
+| `evidence` | 1–10 objects containing exactly `source_id`, `claim` |
+
+Action order is consecutive integers starting at 1 in array order. Descriptions,
+reasons, and evidence claims are nonblank and at most 1,000 code points.
+Each evidence source must be a hyphenated UUID matching the input incident UUID
+(case-insensitive comparison). Text is preserved without trimming or normalization.
+Reference validation establishes neither factual accuracy nor a correct diagnosis.
+
+The decoder rejects unknown, duplicate (including escaped equivalent), missing,
+wrong-case, and incorrectly typed fields, null values, trailing JSON/content,
+invalid UTF-8, unpaired Unicode surrogate escapes, and NUL characters. Input is
+limited to 64 KiB before decoding, nesting to 16 containers, and the result to
+64 KiB after standard Go JSON serialization (including HTML escaping).
+`SchemaVersion` is 1; trusted metadata such as source, version, IDs, and timestamps
+is deliberately absent from result JSON and must be assigned by future consumers.
+The fake analyzer's synthetic wording and zero-confidence policy will be wired in
+4B.3; this provider-independent contract permits the full confidence range.
 
 ## Local validation
 

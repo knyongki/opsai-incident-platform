@@ -27,7 +27,11 @@ recovery, tests, local configuration, and documentation. Implementation and this
 migration were approved together by the user's request to execute the plan.
 Future migrations still need explicit approval. Keep fake execution on a separate
 localhost database ending in _worker_test; incidents remain open and no analysis
-results are stored. Do not add incident update endpoints, real AI, MQTT,
+results are stored. Milestone 4B.1 is authorized: provider-independent result types,
+strict JSON decoding, semantic validation, unit tests, and contract documentation.
+Parts 4B.2–4B.4 remain planned; do not wire validation into workers, persist results,
+or change API/Postman contracts as part of 4B.1.
+Do not add incident update endpoints, real AI, MQTT,
 authentication, cloud synchronization, CI workflows, or later features without
 an explicit new user request. The blueprint is a roadmap, not blanket authorization.
 
@@ -42,6 +46,7 @@ not authorization to implement later features.
 - `cmd/api` wires configuration, logging, HTTP startup, and shutdown.
 - `cmd/worker` wires the explicit fake worker and bounded shutdown.
 - `internal/worker` owns job processing, retry policy, and consumer-owned interfaces.
+- `internal/analysis` owns the versioned result contract and provider-independent validation.
 - `internal/config` loads and validates environment configuration.
 - `internal/platform/logging` constructs `log/slog` structured logging.
 - `internal/device` owns device models, validation, service logic, and the repository interface.
