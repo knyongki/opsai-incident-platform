@@ -47,3 +47,12 @@ type Incident struct {
 	UpdatedAt   pgtype.Timestamptz
 	ResolvedAt  pgtype.Timestamptz
 }
+
+type IncidentAnalysis struct {
+	ID            pgtype.UUID
+	IncidentID    pgtype.UUID
+	SchemaVersion int32
+	Source        string
+	Result        []byte
+	CreatedAt     pgtype.Timestamptz
+}

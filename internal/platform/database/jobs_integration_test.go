@@ -49,6 +49,9 @@ func jobFixtures(t *testing.T, pool *pgxpool.Pool, ctx context.Context, n int) [
 	t.Cleanup(func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+		if _, err := pool.Exec(cleanup, "DELETE FROM incident_analyses WHERE incident_id IN (SELECT id FROM incidents WHERE device_id=$1)", d.ID); err != nil {
+			t.Error("analysis cleanup failed")
+		}
 		if _, err := pool.Exec(cleanup, "DELETE FROM analysis_jobs WHERE incident_id IN (SELECT id FROM incidents WHERE device_id=$1)", d.ID); err != nil {
 			t.Error("job cleanup failed")
 		}
@@ -76,7 +79,7 @@ func jobExec(t *testing.T, pool *pgxpool.Pool, ctx context.Context, sql string, 
 		t.Fatal("job fixture mutation failed")
 	}
 }
-func assertJob(t *testing.T, pool *pgxpool.Pool, ctx context.Context, id, status string, attempt int) {
+func assertJob(t *testing.T, pool queryRower, ctx context.Context, id, status string, attempt int) {
 	t.Helper()
 	var got string
 	var count int

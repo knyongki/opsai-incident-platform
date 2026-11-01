@@ -3,10 +3,12 @@ package database
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/knyongki/opsai-incident-platform/internal/analysis"
 	"github.com/knyongki/opsai-incident-platform/internal/platform/database/dbgen"
 	"github.com/knyongki/opsai-incident-platform/internal/worker"
 )
@@ -100,6 +102,60 @@ func (r *JobRepository) Finish(ctx context.Context, job worker.Job, outcome work
 		n, err := q.FinishAnalysisJob(ctx, dbgen.FinishAnalysisJobParams{
 			ID: id, ClaimToken: token, NextStatus: outcome.Status, DelayMs: outcome.Delay.Milliseconds(),
 			ErrorCode: pgtype.Text{String: outcome.Code, Valid: outcome.Code != ""},
+		})
+		if err != nil {
+			return worker.ErrRepository
+		}
+		if n != 1 {
+			return worker.ErrOwnership
+		}
+		return nil
+	})
+}
+
+// FinishWithResult stores a validated analysis and completes its owned job atomically.
+func (r *JobRepository) FinishWithResult(ctx context.Context, job worker.Job, result analysis.Result) error {
+	id, err := uuid(job.ID)
+	if err != nil {
+		return worker.ErrOwnership
+	}
+	token, err := uuid(job.Token)
+	if err != nil {
+		return worker.ErrOwnership
+	}
+	analysisID := pgtype.UUID{Valid: true}
+	if _, err := rand.Read(analysisID.Bytes[:]); err != nil {
+		return worker.ErrRepository
+	}
+	analysisID.Bytes[6] = (analysisID.Bytes[6] & 15) | 64
+	analysisID.Bytes[8] = (analysisID.Bytes[8] & 63) | 128
+	return r.transaction(ctx, func(ctx context.Context, q *dbgen.Queries) error {
+		row, err := q.LockAnalysisJob(ctx, id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return worker.ErrOwnership
+		}
+		if err != nil {
+			return worker.ErrRepository
+		}
+		if row.Status != "running" || row.ClaimToken != token {
+			return worker.ErrOwnership
+		}
+		incidentID := uuidString(row.IncidentID)
+		if err := analysis.Validate(result, incidentID); err != nil {
+			return analysis.ErrInvalid
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil {
+			return analysis.ErrInvalid
+		}
+		if err := q.InsertIncidentAnalysis(ctx, dbgen.InsertIncidentAnalysisParams{
+			ID: analysisID, IncidentID: row.IncidentID, SchemaVersion: analysis.SchemaVersion,
+			Source: "fake", Result: encoded,
+		}); err != nil {
+			return worker.ErrRepository
+		}
+		n, err := q.FinishAnalysisJob(ctx, dbgen.FinishAnalysisJobParams{
+			ID: id, ClaimToken: token, NextStatus: "completed",
 		})
 		if err != nil {
 			return worker.ErrRepository

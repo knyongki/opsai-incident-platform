@@ -14,7 +14,7 @@ the [README](../README.md) describes implemented behavior and operating instruct
 | 3A - Incident creation and durable jobs | Finished | Reviewed, verified, and committed as b9c4e4d |
 | 3B - Incident list/detail | Finished | Read APIs implemented and reviewed; unit, integration, Postman, and live pagination checks passed |
 | 4A - Durable worker foundation | Finished | Fake worker, leases, recovery/retries, and validation passed; user accepted; committed as e2e9d1c |
-| 4B - Structured analysis results | In progress | 4B.1 contract In review; persistence, worker integration, and API/Postman remain Planned |
+| 4B - Structured analysis results | In progress | 4B.1 Finished; 4B.2 In review; 4B.3–4B.4 remain Planned |
 
 The full incident and AI workflows remain on the blueprint. Finishing 4A does
 not complete the blueprint's Milestone 4: validated, stored AI results remain later work.
@@ -40,10 +40,9 @@ Lasting contracts and commands are in the [incident read documentation](../READM
 
 **Structured analysis validation and persistence, using the fake analyzer.**
 
-Baseline verified: 4A is committed as e2e9d1c and the working tree was clean before
-this planning change. The user subsequently authorized execution of 4B.1 only.
-The existing uncommitted planning changes were preserved. The proposed migration,
-worker integration, and API change below still need authorization before implementation.
+Baseline verified: 4A is committed as e2e9d1c and 4B.1 is committed as 2e2bd96.
+The user authorized 4B.1 and 4B.2 in separate work sessions. The 4B.2 migration is
+approved; worker integration and API changes still need separate authorization.
 
 ### Delivery in small parts
 
@@ -54,8 +53,8 @@ automatically continue through all four parts.
 
 | Part | Status | Deliverable | Depends on |
 | --- | --- | --- | --- |
-| 4B.1 - Result contract and validation | In review | Typed result, strict JSON decoder, semantic validation, and unit tests implemented and checked | Completed 4A |
-| 4B.2 - Database persistence | Planned | Approved migration, sqlc, atomic completion repository operation, and PostgreSQL tests | Finished 4B.1 |
+| 4B.1 - Result contract and validation | Finished | Committed typed result contract, strict decoder, semantic validation, tests, and README documentation | Completed 4A |
+| 4B.2 - Database persistence | In review | Approved migration, sqlc insert, atomic result/job completion, and PostgreSQL integration tests passed | Finished 4B.1 |
 | 4B.3 - Worker integration | Planned | Fake structured output, input loading, validation, and atomic result completion in the running worker | Finished 4B.2 |
 | 4B.4 - Detail API and Postman | Planned | Detail analysis field, local collection assertions, documentation, and end-to-end checks | Finished 4B.3 |
 
@@ -232,50 +231,36 @@ data.analysis = {
 
 Before each part, inspect Git status, preserve existing work, and confirm the
 preceding part was accepted and committed. Update AGENTS scope only for work
-explicitly authorized. No new dependency, migration, or cloud sync is implied.
-
-#### 4B.1 - Result contract and validation
-
-- [x] Add internal/analysis types, strict JSON decoding, and semantic validation
-  according to version 1 above; expose validated results for later consumers.
-- [x] Add focused tests for valid results and every listed invalid-input boundary.
-- [x] Document the contract and run the normal Go checks.
-
-Done when valid synthetic JSON becomes a typed validated result and malformed or
-invalid output is rejected. No database migration, analyzer-interface change,
-worker wiring, HTTP response change, or Postman change in this part.
-
-Implementation evidence (4B.1):
-
-- `internal/analysis` exposes `Result`, `Action`, `Evidence`, `Decode`, `Validate`,
-  `SchemaVersion`, `MaxJSONBytes`, and sanitized `ErrInvalid`. Mutable results must
-  be revalidated at future persistence boundaries. The lasting contract is in
-  [README](../README.md#analysis-result-contract-milestone-4b1).
-- Tests cover valid round trips, required/exact fields, duplicates, types,
-  Unicode, nulls, confidence, independent array limits, text/action/reference
-  boundaries, input/serialized size, depth, safe errors, and fuzz seed invariants.
-- Passed `gofmt -w cmd internal`, `go mod tidy`, `go vet ./...`,
-  `go test -count=1 ./...`, and `git diff --check`.
-- `docker compose --env-file .env.example config --quiet` passed with sandbox
-  warnings about reading Docker's user config. No service was started.
-- Focused `go test ./internal/analysis -cover` passed with 96.2% statement coverage.
-  Tidy, final vet, and the coverage build needed approved access outside the sandbox after
-  local cache/build failures. Fuzz seeds ran; an extended fuzz campaign was not run.
-- No database/sqlc, integration, live API, or Postman checks were needed or run:
-  the package is not connected to runtime behavior. No dependency changes.
-- Changes reviewed for scope and public-file hygiene; no credentials or generated
-  artifacts added. This was a changed-file review, not a repository/history audit.
-
-Next checkpoint: user review/acceptance and commit of 4B.1 before starting 4B.2.
+explicitly authorized. No dependency, later migration, or cloud sync is authorized
+by the plan alone.
 
 #### 4B.2 - Database persistence
 
-- [ ] Obtain explicit approval for migration 00004 before creating/applying it.
-- [ ] Add the table, result-insert query, and atomic completion operation; regenerate
+- [x] Obtain explicit approval for migration 00004 before creating/applying it.
+- [x] Add the table, result-insert query, and atomic completion operation; regenerate
   sqlc. Reuse existing job ownership checks.
-- [ ] Test populated 4A upgrades, rollback, stale/expired claims, uniqueness, and
+- [x] Test populated 4A upgrades, rollback, stale/expired claims, uniqueness, and
   ambiguous commit outcomes using separate PostgreSQL connections.
-- [ ] Document the storage invariant and run Go plus relevant database checks.
+- [x] Document the storage invariant and run Go checks.
+
+Implementation evidence so far: migration 00004 is additive; sqlc generated the
+insert query; `FinishWithResult` revalidates against the locked database incident
+ID, inserts one `source=fake`, version-1 JSONB result, and completes the unexpired
+owned job in the same transaction. Tagged tests cover existing-job upgrades,
+constraint checks, independent-connection visibility, rollback on insertion and
+completion failures, stale/expired ownership, duplicate protection, and ambiguous
+commit outcomes. The worker and API are unchanged.
+
+Validation: the user ran `scripts/start-worker.ps1 -MigrateOnly` and reported
+Goose up/status success. `TestFinishWithResultIntegration` and
+`TestIncidentAnalysisMigrationIntegration` passed, followed by the full tagged
+database suite with both test URL variables set to the isolated worker database;
+device, incident, read, job, lease-migration, and analysis tests all passed.
+`gofmt -w cmd internal`, `go mod tidy`, `go vet ./...`,
+`go test -count=1 ./...`, sqlc generation, Goose migration validation,
+`docker compose --env-file .env.example config --quiet`, and `git diff --check`
+passed. The Compose check printed sandbox warnings about reading Docker's user
+config. No credentials were displayed or changed.
 
 Done when repository tests prove that one validated result and completed job
 commit together, with neither partial writes nor stale-owner overwrites.
@@ -375,7 +360,6 @@ and how clients distinguish fake output.
 | Old workers bypass result persistence | Stop/rebuild/restart workers during upgrade; no mixed-version execution |
 | Current one-job model grows into unplanned history | One immutable result per incident; defer reanalysis/history design |
 
-Only the 4B.1 contract and validation are implemented and In review. The persistence,
-worker integration, and detail API designs remain proposals. No migration or cloud
-operation was performed. Keep the overall 4B milestone In progress until all parts
-pass their required checks and review; mark Finished only after user acceptance.
+The 4B.1 contract is Finished and 4B.2 is In review. Worker integration and the
+detail API remain planned. Keep the overall 4B milestone In progress until all
+parts pass their required checks and review; mark Finished only after user acceptance.

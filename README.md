@@ -6,7 +6,9 @@ written in Go. Implemented scope: **Milestone 1 (Go API Foundation)**,
 **Milestone 3A (Incident Creation and Durable Job Enqueueing)**, and
 **Milestone 3B (Incident List and Detail APIs)**, and
 **Milestone 4A (Durable Worker Foundation)**. The worker runs only a
-fake analyzer against a separate synthetic test database. Real AI, analysis results,
+fake analyzer against a separate synthetic test database. The 4B.2 repository
+can atomically store validated results, but the worker does not call it yet. Real
+AI and worker-generated analysis results,
 incident update endpoints, MQTT, and authentication remain future work.
 Milestone 4B.1 adds the standalone [analysis result contract](#analysis-result-contract-milestone-4b1)
 for later worker integration. See the
@@ -539,6 +541,21 @@ limited to 64 KiB before decoding, nesting to 16 containers, and the result to
 is deliberately absent from result JSON and must be assigned by future consumers.
 The fake analyzer's synthetic wording and zero-confidence policy will be wired in
 4B.3; this provider-independent contract permits the full confidence range.
+
+## Analysis persistence (Milestone 4B.2)
+
+Migration `00004_create_incident_analyses.sql` adds one immutable row per incident
+with an application-generated UUID, schema version 1, trusted source `fake`, a
+JSONB result, and a database-generated timestamp. The migration preserves existing
+4A jobs and does not fabricate results for completed jobs.
+
+`JobRepository.FinishWithResult` revalidates the typed result against the incident
+ID read from the locked job row. It inserts the result and completes the currently
+owned, unexpired job in one transaction. A failed insert, completion, or commit
+leaves no partially stored state; a lost commit acknowledgement can still mean the
+transaction committed, so callers must use existing job recovery semantics.
+The running 4A worker continues using its original completion operation until 4B.3.
+No API response exposes stored results yet.
 
 ## Local validation
 

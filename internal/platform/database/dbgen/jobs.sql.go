@@ -87,6 +87,31 @@ func (q *Queries) FinishAnalysisJob(ctx context.Context, arg FinishAnalysisJobPa
 	return result.RowsAffected(), nil
 }
 
+const insertIncidentAnalysis = `-- name: InsertIncidentAnalysis :exec
+INSERT INTO incident_analyses (id, incident_id, schema_version, source, result)
+VALUES ($1::uuid, $2::uuid, $3::integer,
+        $4::text, $5::jsonb)
+`
+
+type InsertIncidentAnalysisParams struct {
+	ID            pgtype.UUID
+	IncidentID    pgtype.UUID
+	SchemaVersion int32
+	Source        string
+	Result        []byte
+}
+
+func (q *Queries) InsertIncidentAnalysis(ctx context.Context, arg InsertIncidentAnalysisParams) error {
+	_, err := q.db.Exec(ctx, insertIncidentAnalysis,
+		arg.ID,
+		arg.IncidentID,
+		arg.SchemaVersion,
+		arg.Source,
+		arg.Result,
+	)
+	return err
+}
+
 const lockAnalysisJob = `-- name: LockAnalysisJob :one
 SELECT id, incident_id, status, attempt_count, available_at, locked_at, last_error, created_at, updated_at, claim_token, lease_expires_at FROM analysis_jobs WHERE id = $1 FOR UPDATE
 `

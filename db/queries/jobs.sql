@@ -28,6 +28,11 @@ WHERE id = sqlc.arg(id)::uuid AND status = 'running'
     AND claim_token = sqlc.arg(claim_token)::uuid
     AND lease_expires_at > clock_timestamp();
 
+-- name: InsertIncidentAnalysis :exec
+INSERT INTO incident_analyses (id, incident_id, schema_version, source, result)
+VALUES (sqlc.arg(id)::uuid, sqlc.arg(incident_id)::uuid, sqlc.arg(schema_version)::integer,
+        sqlc.arg(source)::text, sqlc.arg(result)::jsonb);
+
 -- name: LockRecoverableAnalysisJobs :many
 SELECT * FROM analysis_jobs
 WHERE (status = 'running' AND lease_expires_at <= clock_timestamp())
