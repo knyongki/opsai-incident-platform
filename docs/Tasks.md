@@ -2,7 +2,9 @@
 
 Use this file for current status and active tasks. The
 [project blueprint](OpsAI-Project-Blueprint.md) keeps the general milestone roadmap;
-the [README](../README.md) describes implemented behavior and operating instructions.
+the [README](../README.md) describes the product, and the [API reference](API-Reference.md),
+[worker and analysis guide](Worker-and-Analysis.md), and [setup guide](Local-Automation-Setup.md)
+describe implemented behavior and operating instructions.
 
 ## Status overview
 
@@ -20,12 +22,12 @@ The full incident and AI workflows remain on the blueprint. Milestone 4B stores 
 exposes only deterministic fake results (`source: "fake"`); real AI providers, the
 analyzing/analyzed/analysis_failed incident transitions, reanalysis, and result
 history need a new plan and an explicit request.
-Lasting contracts and commands are in the [incident read documentation](../README.md#incident-reads-milestone-3b),
-[stored analysis in detail](../README.md#stored-analysis-in-detail-milestone-4b4),
-[fake worker documentation](../README.md#fake-worker-milestone-4a),
-[analysis contract](../README.md#analysis-result-contract-milestone-4b1),
-[analysis persistence](../README.md#analysis-persistence-milestone-4b2), and
-[worker setup guide](Local-Automation-Setup.md#isolated-fake-worker-milestone-4a).
+Lasting contracts and commands are in the [API reference](API-Reference.md)
+(including [incident analysis](API-Reference.md#analysis)), the
+[worker and analysis guide](Worker-and-Analysis.md) (including the
+[analysis contract](Worker-and-Analysis.md#analysis-result-contract) and
+[storage](Worker-and-Analysis.md#storage)), and the
+[worker setup guide](Local-Automation-Setup.md#isolated-fake-worker).
 
 No milestone is currently active or planned in this file.
 

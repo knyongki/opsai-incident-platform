@@ -1,655 +1,207 @@
 # OpsAI
 
-OpsAI is an AI-assisted incident-analysis platform for industrial equipment,
-written in Go. Implemented scope: **Milestone 1 (Go API Foundation)**,
-**Milestone 2A (PostgreSQL Foundation)**, **Milestone 2B (Device Management API)**,
-**Milestone 3A (Incident Creation and Durable Job Enqueueing)**,
-**Milestone 3B (Incident List and Detail APIs)**,
-**Milestone 4A (Durable Worker Foundation)**, and
-**Milestone 4B (Structured Analysis Results, fake analyzer only)**. The worker runs only a
-fake analyzer against a separate synthetic test database. The 4B.3 worker stores
-validated synthetic results atomically with job completion, and since 4B.4 incident
-detail returns them as a labeled `analysis` field. Real AI,
-incident update endpoints, MQTT, and authentication remain future work.
-Milestone 4B.1 defines the [analysis result contract](#analysis-result-contract-milestone-4b1),
-used by the fake worker since 4B.3. See the
-[blueprint](docs/OpsAI-Project-Blueprint.md) and [contributor rules](AGENTS.md).
+**AI-assisted incident analysis for industrial equipment.**
 
-## Start locally (PowerShell)
+When an AMR, conveyor, or PLC-connected machine raises an alarm, engineers
+usually piece together logs, symptoms, and past fixes by hand. OpsAI gives that
+work a home: you register equipment, report an incident with its alarm and logs,
+and a background worker analyzes it and attaches a structured, validated
+troubleshooting result to the incident.
 
-Run commands from the repository root. For a new computer, follow the
-[Windows setup guide](docs/Local-Automation-Setup.md) to install Go, Docker Desktop,
-and project-local Goose.
+OpsAI is decision support for troubleshooting and incident documentation. It does
+not replace qualified engineering judgment.
 
-### First-time configuration
+> **Current status:** the analysis pipeline is complete end to end, but it runs
+> a deterministic **fake analyzer** for development and testing. Results are
+> labeled `source: "fake"`, state that no diagnosis was performed, and have
+> confidence 0. Real AI providers are on the [roadmap](#roadmap).
 
-Create a private configuration file only if it does not exist:
+## What you can do today
+
+- **Manage devices:** register, list, update, and delete equipment records.
+- **Report incidents:** submit an alarm code, description, severity, and raw logs.
+  The incident and its analysis job are saved together in one transaction.
+- **Browse incidents:** filter by device, status, severity, or alarm code, with
+  stable cursor pagination.
+- **Get structured analysis:** a separate worker processes each job and stores a
+  strictly validated result, shown on the incident as `analysis`.
+
+## How it works
+
+```text
+            HTTP (JSON)                        claims jobs
+ Client ───────────────▶  API  (cmd/api)        Worker (cmd/worker)
+                           │                      │   │
+            incident + job │ one transaction      │   │ analyzer (fake today)
+                           ▼                      ▼   ▼
+                      ┌──────────────────── PostgreSQL ───────────────────┐
+                      │ devices · incidents · analysis_jobs ·             │
+                      │ incident_analyses (one validated result/incident) │
+                      └───────────────────────────────────────────────────┘
+```
+
+1. `POST /api/v1/incidents` stores the incident and a `pending` job atomically and
+   returns `202` with `analysis_status: "queued"`.
+2. The worker claims the job with a lease and claim token, loads only that
+   incident, and runs the analyzer outside any database transaction.
+3. The output must pass a strict, versioned contract. A valid result is stored in
+   the same transaction that completes the job, so there is never a completed job
+   with a half-written result. Invalid output fails the job and stores nothing.
+4. `GET /api/v1/incidents/{id}` returns the incident, its job status, and the
+   stored analysis from one consistent read.
+
+Retries are bounded with exponential backoff, expired leases are recovered, and a
+stale worker can never overwrite a newer one. Details:
+[Worker and analysis](docs/Worker-and-Analysis.md).
+
+### Technology choices
+
+| Choice | Why |
+| --- | --- |
+| Go standard library (`net/http`, `log/slog`, `encoding/json`) | Small dependency surface, explicit behavior |
+| PostgreSQL 17 with pgx/v5 | Transactions, `SKIP LOCKED` job claiming, JSONB results |
+| A PostgreSQL job table instead of a message broker | One system to run; the job and incident commit together |
+| Goose migrations, sqlc-generated queries | Reviewable SQL with type-safe Go code |
+| Separate worker process and test database | Analysis never blocks HTTP requests; fake runs cannot touch the normal queue |
+
+## Quick start (Windows PowerShell)
+
+Requirements: Go 1.26.5 or newer, Docker Desktop, and project-local Goose. The
+[setup guide](docs/Local-Automation-Setup.md) installs everything step by step.
 
 ```powershell
+# 1. Create private configuration once, then edit it with your local values.
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
-```
 
-Edit `.env` privately before starting. Use the keys defined in `.env.example`,
-with values matching your local database. Keep DATABASE_URL and POSTGRES settings
-consistent, including URL-encoding special characters in URL credentials.
-The file stays Git-ignored; never commit it or overwrite existing credentials.
-Existing API keys remain required; new WORKER_/JOB_ settings are optional and use
-defaults when absent. Fake mode has no enabling default.
-
-### Daily startup
-
-Open Docker Desktop, then run:
-
-```powershell
+# 2. Start PostgreSQL, apply migrations, and run the API on http://127.0.0.1:8080.
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-local.ps1
-```
 
-The script loads private `.env`, starts/reuses PostgreSQL, applies pending forward
-migrations, checks migration status, and runs the API. Defaults are PostgreSQL on
-**5432** and the API at **http://127.0.0.1:8080**. Keep the terminal open.
-Startup does not run tests or require Postman CLI.
-
-Private file values override inherited terminal values. The scripts accept literal
-KEY=VALUE lines without interpolation; the Go API reads process environment
-variables. See the setup guide for syntax, terminal-only configuration, and
-troubleshooting.
-
-To send requests, follow the [Postman quickstart](docs/Postman-Quickstart.md).
-For automated checks, see [local validation](#local-validation).
-
-### Stop safely
-
-Press **Ctrl+C** to stop the API. PostgreSQL stays running. To stop it while
-preserving data:
-
-```powershell
-docker compose --env-file .env.example stop postgres
-```
-
-Run the startup command again next time. Do not delete volumes or run Goose Down
-as routine cleanup. Existing database credentials are not changed by editing
-Compose initialization settings.
-
-### Health and readiness
-
-```powershell
-curl.exe -i http://127.0.0.1:8080/health
+# 3. In another terminal, check it is up.
 curl.exe -i http://127.0.0.1:8080/ready
 ```
 
-`/health` returns HTTP 200 with `{"data":{"status":"ok"}}` while the process serves
-requests. `/ready` pings PostgreSQL with a two-second deadline on every request:
+`.env` is Git-ignored; never commit it. Then create a device and an incident with
+the [Postman quickstart](docs/Postman-Quickstart.md) or the PowerShell examples in
+the [API reference](docs/API-Reference.md). Press Ctrl+C to stop the API;
+PostgreSQL keeps running and keeps its data.
 
-- Reachable: HTTP 200, `{"data":{"status":"ready"}}`.
-- Unavailable: HTTP 503,
-  `{"error":{"code":"DATABASE_UNAVAILABLE","message":"The database is unavailable."}}`.
+To see analysis results, run the fake worker against its separate test database:
+[isolated worker setup](docs/Local-Automation-Setup.md#isolated-fake-worker).
 
-Readiness checks connectivity, not schema/migration state. Both routes support
-HEAD without a response body. Application responses use `Content-Type: application/json`.
-Unknown paths return HTTP 404 with
-`{"error":{"code":"NOT_FOUND","message":"The requested resource was not found."}}`.
-Unsupported methods on these System paths return HTTP 405 with the same error envelope
-and `Allow: GET, HEAD`. Paths match exactly; `/health/` is not `/health`.
-Malformed HTTP rejected before routing uses Go's protocol-level responses.
+## API at a glance
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET /health`, `GET /ready` | Process liveness; database readiness |
+| `POST /api/v1/devices` | Register a device |
+| `GET /api/v1/devices`, `GET /api/v1/devices/{id}` | List or read devices |
+| `PATCH /api/v1/devices/{id}`, `DELETE /api/v1/devices/{id}` | Update or delete a device |
+| `POST /api/v1/incidents` | Report an incident; queues its analysis |
+| `GET /api/v1/incidents` | List incidents with filters and cursor pagination |
+| `GET /api/v1/incidents/{id}` | Full incident, job status, and `analysis` |
+
+Example incident detail after analysis (fields shortened):
+
+```json
+{
+  "data": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "title": "Demo docking failure",
+    "severity": "high",
+    "status": "open",
+    "analysis_status": "completed",
+    "analysis": {
+      "schema_version": 1,
+      "source": "fake",
+      "result": {
+        "summary": "...",
+        "confidence": 0,
+        "evidence": [{ "source_id": "00000000-0000-4000-8000-000000000001", "claim": "..." }]
+      }
+    }
+  }
+}
+```
+
+Every field, limit, and error code is in the [API reference](docs/API-Reference.md).
 
 ## Configuration
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `APP_ENV` | `development` | Environment label; no behavior switch yet |
-| `HTTP_ADDRESS` | `127.0.0.1:8080` | Explicit host and numeric port (1-65535) |
+| `HTTP_ADDRESS` | `127.0.0.1:8080` | Explicit host and numeric port; localhost by default |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARN`, or `ERROR`, case-insensitive |
 | `DATABASE_URL` | Required | PostgreSQL URL with host and database |
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | Required by Compose | Local initialization values |
 | `POSTGRES_PORT` | `5432` | Localhost port published by Compose |
 
-Empty optional API values use defaults. Missing or invalid required configuration
-fails startup without echoing connection strings.
+Missing or invalid required settings fail startup without echoing connection
+strings. Worker settings (`WORKER_*`, `JOB_*`) are optional for the API and listed
+in [Worker and analysis](docs/Worker-and-Analysis.md#configuration).
 
-## Architecture and Go concepts
-
-- `cmd/api`: entry point, dependency wiring, and graceful shutdown.
-- `cmd/worker` and `internal/worker`: separate fake worker, job policy, and consumer-owned repository/analyzer contracts.
-- `internal/config`: environment configuration and validation.
-- `internal/platform/logging`: structured `log/slog` logging.
-- `internal/device`: device model, validation, service, and repository interface.
-- `internal/incident`: incident validation, creation/read services, cursor pagination, and repository contract.
-- `internal/platform/database`: connection pool, startup checks, and device/incident repositories.
-- `internal/platform/database/dbgen`: generated sqlc queries.
-- `internal/transport/http`: handlers, envelopes, readiness interface, and server.
-- `db/migrations`: reversible Goose SQL migrations.
-- `db/sqlc.yaml` and `db/queries`: device/incident SQL and query generation configuration.
-
-A pool reuses a bounded set of database connections across requests. This pool
-allows 10 connections, a five-minute idle limit, and a one-hour lifetime. HTTP
-timeouts remain 5 seconds for headers, 10 seconds for reads and writes, and
-60 seconds for idle connections.
-
-The HTTP package defines a small `ReadinessChecker` interface with `Ping(context.Context)`.
-Go interfaces are satisfied implicitly: `pgxpool.Pool` and test doubles both provide
-that method. HTTP unit tests need no database. `context.Context` carries cancellation
-and deadlines; `defer pool.Close()` releases the pool after HTTP shutdown. The
-`internal` directory restricts these packages' import scope.
-
-sqlc generates pgx/v5 code from the existing migration and named queries. Install
-its pinned development CLI locally (no new runtime dependency):
+## Testing
 
 ```powershell
-$previousGoBin = $env:GOBIN
-try {
-    $env:GOBIN = Join-Path (Get-Location) 'bin'
-    go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
-    if ($LASTEXITCODE -ne 0) { throw 'sqlc installation failed.' }
-} finally {
-    $env:GOBIN = $previousGoBin
-}
-.\bin\sqlc.exe generate -f db/sqlc.yaml
-```
-
-Generated files are committed under `internal/platform/database/dbgen`; do not edit
-them manually. There are no `go:generate` directives. The original devices migration
-is unchanged. The service owns validation and depends on a small repository
-interface, allowing unit tests to use in-memory test doubles. The PostgreSQL
-repository converts driver types and errors at its boundary.
-
-## Device API (Milestone 2B)
-
-Start PostgreSQL, apply migrations, and start the API using the setup above.
-These PowerShell examples operate only on the device created in the first command:
-
-```powershell
-$base = 'http://127.0.0.1:8080/api/v1/devices'
-$body = @{
-    name = 'AMR-07'
-    type = 'amr'
-    location = 'Assembly line 1'
-    metadata = @{ manufacturer = 'Example' }
-} | ConvertTo-Json -Depth 10
-$created = Invoke-RestMethod -Method Post -Uri $base -ContentType 'application/json' -Body $body
-$deviceId = $created.data.id
-Invoke-RestMethod -Method Get -Uri $base
-Invoke-RestMethod -Method Get -Uri "$base/$deviceId"
-$patch = @{ status = 'online'; location = $null } | ConvertTo-Json
-Invoke-RestMethod -Method Patch -Uri "$base/$deviceId" -ContentType 'application/json' -Body $patch
-Invoke-WebRequest -Method Delete -Uri "$base/$deviceId" -UseBasicParsing
-```
-
-| Method | Path | Success |
-| --- | --- | --- |
-| POST | `/api/v1/devices` | 201, device in `data`, and `Location` header |
-| GET | `/api/v1/devices` | 200, array in `data` (empty array when none) |
-| GET | `/api/v1/devices/{id}` | 200, device in `data` |
-| PATCH | `/api/v1/devices/{id}` | 200, updated device in `data` |
-| DELETE | `/api/v1/devices/{id}` | 204, no response body |
-
-Creation requires nonblank `name` (up to 200 characters) and `type` (up to 50).
-Optional `status` is nonblank text up to 50 characters, defaulting to `unknown`.
-`location` is nullable text up to 500 characters. `metadata` is a JSON object up
-to 16 KiB, defaulting to `{}`. NUL characters are rejected. Request bodies are
-limited to 64 KiB. IDs must use the standard hyphenated UUID format. The service
-generates random UUID v4 IDs; clients cannot set IDs or timestamps.
-
-The schema has no enum constraints: suggested types include `amr`, `conveyor`,
-`plc`, `robot`, and `other`, but other nonblank values are accepted. These length
-limits are application rules; the existing database TEXT columns remain unchanged.
-
-PATCH requires at least one field, preserves omitted fields, and accepts null only
-for `location`. Supplied metadata replaces the entire object. Updates set
-`updated_at` in a single SQL statement; simultaneous changes to different fields
-do not overwrite omitted fields. Changes to the same field use the last update.
-Lists are ordered by creation time then ID; pagination is not implemented.
-
-Malformed JSON, multiple JSON values, unknown fields, wrong field types, invalid
-IDs, and validation failures return 400 `VALIDATION_ERROR`. Missing devices return
-404 `NOT_FOUND`; uniqueness violations return 409 `CONFLICT`; unexpected storage
-failures return 500 `INTERNAL_ERROR`. Errors use the existing `error` envelope and
-never contain database error text. The only unique constraint is the server-generated
-primary key, so duplicate device names are allowed. Unsupported methods return 405.
-Each device operation has a five-second context deadline.
-
-Run the separate repository integration test against a migrated local database.
-Set DATABASE_URL in the current terminal using the setup guide's
-[terminal-only instructions](docs/Local-Automation-Setup.md#alternative-terminal-only-configuration).
-The startup script loads private configuration only in its child process; it does
-not export DATABASE_URL back to your terminal.
-
-
-```powershell
-$env:OPSAI_TEST_DATABASE_URL = $env:DATABASE_URL
-try {
-    go test -tags=integration ./internal/platform/database -run TestDeviceRepositoryIntegration -count=1
-} finally {
-    Remove-Item Env:OPSAI_TEST_DATABASE_URL
-}
-```
-
-The test requires the explicit `integration` build tag and environment variable.
-It checks CRUD, partial updates, missing records, and uniqueness mapping inside a
-transaction which is rolled back. Normal `go test ./...` needs no database.
-
-## Incident creation (Milestone 3A)
-
-`POST /api/v1/incidents` stores an incident and its initial analysis job in one
-PostgreSQL transaction. A transaction makes both inserts succeed together or
-roll back together; HTTP 202 is returned only after commit. SQL calls use the
-same transaction-bound sqlc instance. IDs are server-generated UUID v4 values.
-The service remains independent of HTTP and PostgreSQL.
-
-Migration `00002_create_incidents_and_analysis_jobs.sql` adds both tables without
-changing the devices migration. It adds severity/status checks, a nonnegative
-attempt count, device and incident foreign keys, one-job-per-incident uniqueness,
-a device-reference index, and an index of pending jobs by availability time.
-Deleting a device referenced by an incident now returns 409 `CONFLICT`.
-
-| Field | Contract |
-| --- | --- |
-| `device_id` | Required UUID of an existing device |
-| `title` | Required, nonblank, at most 200 Unicode characters |
-| `description` | Required, nonblank, at most 10,000 characters |
-| `severity` | Required: `low`, `medium`, `high`, or `critical` |
-| `alarm_code` | Optional/null; at most 100 characters |
-| `raw_logs` | Optional (defaults to `[]`); at most 100 strings of 1,000 characters each; null array/entries rejected |
-| `occurred_at` | Optional/null; RFC3339 timestamp with offset; normalized to UTC; future dates allowed |
-
-NUL and invalid UTF-8 text, unknown fields, malformed/multiple JSON values, and
-bodies larger than 256 KiB are rejected with 400 `VALIDATION_ERROR`. A missing
-device returns 404 `NOT_FOUND`; unexpected failures return a sanitized 500
-`INTERNAL_ERROR`. The collection route also supports GET (see below); other methods
-return 405 with `Allow: GET, POST`.
-Clients cannot supply IDs, status, attempt counts, or server timestamps.
-
-The response is `{"data":{"id":"INCIDENT_UUID","status":"open","analysis_status":"queued"}}`.
-`queued` means a job with stored status `pending` exists. Normal API startup does
-not start a worker. The explicit 4A fake worker uses a separate test database.
-Repeating POST creates a new incident and job;
-idempotency is not implemented. Worker retries update the same job row;
-separate reanalysis history needs a later schema decision.
-
-From a terminal with DATABASE_URL configured using the
-[terminal-only instructions](docs/Local-Automation-Setup.md#alternative-terminal-only-configuration),
-matching any private `.env`, apply forward migrations and run
-System checks, then run device, incident creation, and incident read integration tests:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-local.ps1
-if ($LASTEXITCODE -ne 0) { throw 'Migration/System validation failed.' }
-$previousTestURL = $env:OPSAI_TEST_DATABASE_URL
-try {
-    $env:OPSAI_TEST_DATABASE_URL = $env:DATABASE_URL
-    go test -tags=integration ./internal/platform/database -run 'Test(DeviceRepository|IncidentRepository|IncidentReads)Integration' -count=1 -v
-    if ($LASTEXITCODE -ne 0) { throw 'Repository integration tests failed.' }
-} finally {
-    $env:OPSAI_TEST_DATABASE_URL = $previousTestURL
-    Remove-Variable previousTestURL
-}
-```
-
-These integration tests need all current migrations applied. The incident test commits
-synthetic records and checks visibility from another connection, deliberately
-fails a job insert to prove rollback, rejects duplicate jobs, and verifies device
-deletion protection. Cleanup deletes only rows created by that test. Tests skip
-without the test URL; a skipped test is not evidence of transaction correctness.
-The read integration test uses rolled-back fixtures for timestamp ties, pagination,
-all filters, status mapping, complete detail, and missing incidents/jobs.
-
-For a manual API check, start the API with `scripts/start-local.ps1` as shown above.
-In another terminal, use synthetic data (these records persist):
-
-```powershell
-$base = 'http://127.0.0.1:8080'
-$deviceBody = @{ name = 'Demo incident device'; type = 'amr' } | ConvertTo-Json
-$demoDevice = Invoke-RestMethod -Method Post -Uri "$base/api/v1/devices" -ContentType 'application/json' -Body $deviceBody
-$incidentBody = @{
-    device_id = $demoDevice.data.id
-    title = 'Demo docking failure'
-    description = 'Synthetic incident for local verification.'
-    severity = 'high'
-    raw_logs = @('Synthetic docking log')
-    occurred_at = '2026-09-14T09:30:00Z'
-} | ConvertTo-Json
-$response = Invoke-WebRequest -UseBasicParsing -Method Post -Uri "$base/api/v1/incidents" -ContentType 'application/json' -Body $incidentBody
-$response.StatusCode # 202
-$response.Content
-```
-
-The local Postman collection also has an **Incidents - Manual** folder. Run it
-explicitly; it creates its own device before the incident. Normal automation still
-runs only System:
-
-```powershell
-postman collection run 'api/postman/OpsAI API' -i 'Incidents - Manual' --env-var 'base_url=http://127.0.0.1:8080' --no-report-events
-```
-
-This creates a persistent device, incident, and job on each run. The folder uses
-incident_device_id independently of the device CRUD folder's device_id and cleanup.
-No incident delete endpoint exists, and device deletion is restricted afterward.
-Use the integration test for repeatable verification with automatic fixture cleanup.
-
-## Incident reads (Milestone 3B)
-
-Both read endpoints return HTTP 200 in the existing `data` envelope and have a
-five-second operation timeout. They do not modify incidents or jobs.
-
-| Method and path | Result |
-| --- | --- |
-| `GET /api/v1/incidents` | `{ "data": { "items": [], "page": { "next_cursor": null, "has_more": false } } }` when empty |
-| `GET /api/v1/incidents/{id}` | Complete incident in `data`; invalid UUID returns 400, missing incident returns 404 |
-
-### List parameters and pagination
-
-| Parameter | Contract |
-| --- | --- |
-| `limit` | Decimal integer, default 20, range 1-100 |
-| `cursor` | Opaque `next_cursor` from the preceding page; omit for the first page |
-| `device_id` | Exact hyphenated UUID; UUID letter case is normalized |
-| `status` | Exact `open`, `analyzing`, `analyzed`, `analysis_failed`, or `resolved` |
-| `severity` | Exact `low`, `medium`, `high`, or `critical` |
-| `alarm_code` | Exact case-sensitive text, maximum 100 Unicode characters; NUL/invalid UTF-8 rejected |
-
-Filters combine with AND. Empty supplied values are invalid except `alarm_code=`:
-that matches a stored empty string, not NULL. Omit alarm_code to include all values.
-Malformed cursors, invalid filters/limits, duplicate parameters, unknown parameters,
-and malformed URL query encoding return 400 `VALIDATION_ERROR`. Detail accepts no
-query parameters. Unsupported methods return 405 (`Allow: GET` on detail).
-
-Rows are ordered by `created_at DESC, id DESC`. Each query fetches `limit + 1`
-summary rows; the extra row determines `has_more`. If true, `next_cursor` represents
-the last returned row. Otherwise it is null. Subsequent queries use the strict
-tuple boundary `(created_at, id) < (cursor timestamp, cursor UUID)`, with no offset.
-This tie-breaker prevents skipped or duplicated rows with equal timestamps.
-
-The versioned cursor is canonical JSON encoded with unpadded base64url. It holds
-the timestamp, UUID, and SHA-256 of normalized filters. Clients must treat it as
-opaque and resend the same filters; changed or omitted filters return 400.
-The page size may change. The cursor is not signed or an authorization token.
-It does not provide a database snapshot across requests: newly inserted rows ahead
-of the boundary require restarting from the first page, and changing filter fields
-can change membership between pages.
-
-### Response fields
-
-List items contain only `id`, `device_id`, `title`, `alarm_code`, `severity`,
-`status`, `analysis_status`, `occurred_at`, `created_at`, and `updated_at`.
-They omit description and raw logs. `items` is always an array.
-
-Detail adds `description`, `raw_logs`, `resolved_at`, and `analysis`. Optional alarm_code,
-occurred_at, and resolved_at serialize as JSON null when absent; raw_logs is an
-array, including `[]` when empty. Timestamps are returned in UTC.
-
-### Stored analysis in detail (Milestone 4B.4)
-
-`analysis` is `null` until a validated result is stored: for queued, running, and
-failed jobs, and for legacy completed jobs from before 4B.3. Otherwise it is:
-
-```json
-{
-  "id": "UUID",
-  "schema_version": 1,
-  "source": "fake",
-  "created_at": "UTC timestamp",
-  "result": { "summary": "...", "primary_suspected_cause": "...",
-              "contributing_factors": [], "observed_conditions": ["..."],
-              "recommended_actions": [], "safety_notes": ["..."],
-              "confidence": 0, "evidence": [{ "source_id": "incident UUID", "claim": "..." }] }
-}
-```
-
-`source: "fake"` marks deterministic test output: no diagnosis was performed and
-confidence is 0. The repository revalidates stored JSON with the strict
-[version-1 decoder](#analysis-result-contract-milestone-4b1) before returning it.
-An unsupported version or source, malformed result, evidence for another incident,
-or a result attached to a non-completed job returns sanitized 500
-`INTERNAL_ERROR`; stored JSON is never returned unvalidated. List and POST
-responses are unchanged and never include `analysis`.
-
-The existing job row supplies analysis_status: `pending` maps to `queued`;
-`running`, `completed`, and `failed` retain their names. No job IDs, attempt counts,
-lock timestamps, or internal errors are exposed. A missing/invalid job is treated
-as a storage invariant failure (sanitized 500 `INTERNAL_ERROR`), rather than hiding
-the incident. A nonexistent incident returns 404 `NOT_FOUND`.
-
-The sqlc queries `ListIncidents` and `GetIncident` read the existing tables with a
-left join to analysis_jobs; `GetIncident` also left-joins incident_analyses, so the
-incident, job status, and analysis come from one consistent statement. No schema
-migration or dependency was added for reads. Existing
-indexes are sufficient for correctness; large datasets may need a measured index
-improvement later. Performance/load testing is not part of this milestone.
-
-### Try list and detail
-
-After creating an incident using the example above:
-
-```powershell
-$incidentId = ($response.Content | ConvertFrom-Json).data.id
-Invoke-RestMethod "$base/api/v1/incidents/$incidentId"
-$filters = "device_id=$($demoDevice.data.id)&status=open&severity=high"
-$firstPage = Invoke-RestMethod "$base/api/v1/incidents?limit=1&$filters"
-$firstPage.data.items
-if ($firstPage.data.page.has_more) {
-    $cursor = [Uri]::EscapeDataString($firstPage.data.page.next_cursor)
-    Invoke-RestMethod "$base/api/v1/incidents?limit=1&$filters&cursor=$cursor"
-}
-```
-
-Alternatively run the local **Incidents - Manual** Postman folder: its setup saves
-incident_id, then the read requests check list, combined filters, complete detail,
-invalid UUID, and a missing incident; detail requires `analysis` to be null unless the
-job is completed. **Incidents - Worker Result** checks a stored fake result; run it only
-with the [isolated worker setup](docs/Local-Automation-Setup.md#isolated-fake-worker-milestone-4a).
-The 3B requests and the 4B.4 changes (detail
-assertions, the worker-result folder, and its `worker_` variables) were synchronized
-to the cloud collection on explicit request and compared with the local files. Automatic
-validation continues to run only **System**; later edits are not automatically synced.
-
-To run the device and incident repository integration tests with private .env in an isolated process:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command {
-    $ErrorActionPreference = 'Stop'
-    . ./scripts/local-environment.ps1
-    $settings = Read-LocalEnvironment -Root (Get-Location).Path
-    $env:OPSAI_TEST_DATABASE_URL = $settings.DATABASE_URL
-    go test -tags=integration ./internal/platform/database `
-        -run 'Test(DeviceRepository|IncidentRepository|IncidentReads)Integration' -count=1 -v
-    exit $LASTEXITCODE
-}
-```
-
-PostgreSQL must be running with all current migrations applied, including 00004,
-which the stored-analysis detail subtest needs. Require all three
-tests to report PASS, not SKIP. Normal `go test ./...` remains database-independent.
-
-## Fake worker (Milestone 4A)
-
-Use the [worker setup instructions](docs/Local-Automation-Setup.md#isolated-fake-worker-milestone-4a)
-to create and migrate a separate localhost database ending in `_worker_test`.
-Set private `WORKER_DATABASE_URL` to that database and explicitly set
-`WORKER_ANALYZER=fake`. The worker never falls back to DATABASE_URL.
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-worker.ps1 -MigrateOnly
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-worker.ps1
-```
-
-The first command validates worker configuration and applies forward migrations
-to the separate worker database without starting work. The second runs one job
-at a time. Ctrl+C cancels active work and stops claiming. Start a second worker
-terminal only against the same synthetic database and with matching policy.
-Regular `start-local.ps1` remains API-only.
-
-Claims use short transactions and SKIP LOCKED. Migration 00003 adds a fresh UUID
-claim token, lease expiry, ownership constraint, and expired-running-job index.
-It rejects incompatible legacy ownership rather than resetting records.
-Analysis runs outside the transaction. Final writes require the current token
-and unexpired lease; expired or stale workers cannot overwrite newer owners.
-Recovery processes up to 100 expired/exhausted jobs per pass. All transition times
-come from PostgreSQL. Shutdown leaves unfinished claims for lease recovery.
-
-Delivery permits repeated execution after a crash; a claim consumes an attempt
-even if the process dies before analysis. Retries have a fixed cap, so successful
-processing is not guaranteed. No heartbeat or exactly-once guarantee exists.
-Storage failures use bounded backoff; uncertain completion is recovered rather
-than immediately re-executed.
-
-| Setting | Default | Meaning |
-| --- | --- | --- |
-| WORKER_ANALYZER | Empty; must explicitly be fake | Enables only the fake implementation |
-| WORKER_DATABASE_URL | Required for worker | Separate localhost database ending in _worker_test |
-| WORKER_FAKE_OUTCOME | success | success, transient, permanent, transient-once, or invalid-output |
-| WORKER_FAKE_DELAY | 100ms | Simulated work; cancellation-aware |
-| JOB_POLL_INTERVAL | 1s | Idle polling delay |
-| JOB_ATTEMPT_TIMEOUT | 30s | Analyzer deadline |
-| JOB_LEASE | 60s | Fixed ownership duration |
-| JOB_DATABASE_TIMEOUT | 5s | Bounded storage operation |
-| JOB_RETRY_BASE / JOB_RETRY_CAP | 2s / 60s | Capped exponential retry delay |
-| JOB_MAX_ATTEMPTS | 3 | Claim limit, 1-100 |
-| WORKER_SHUTDOWN_TIMEOUT | 10s | Maximum wait for cancellation |
-
-Policy durations must be 1ms-24h; fake delay may also be zero. Lease must exceed
-attempt timeout plus three database timeouts (claim, input load, and completion),
-and retry cap must be at least base.
-URLs allow only sslmode, connect_timeout, and application_name query parameters
-to prevent connection overrides bypassing the isolated-database check.
-
-A successful fake run validates its structured result, then stores it in the same
-transaction that completes the job. The source is labeled `fake`; the text says
-no diagnosis was performed, confidence is zero, and evidence refers only to the
-supplied incident. Incidents remain open. `invalid-output` exercises terminal
-validation failure and stores no result. Transient failures and attempt timeouts
-retry within the configured cap; permanent and invalid output stop immediately.
-A storage failure while loading the claimed incident releases the job for retry
-with `ANALYSIS_INPUT_UNAVAILABLE` instead of holding it until lease expiry; a
-result rejected inside the completion transaction is recorded as
-`ANALYSIS_INVALID_OUTPUT`. Incident detail returns the stored result as `analysis`
-(see [Stored analysis in detail](#stored-analysis-in-detail-milestone-4b4)). Safe error
-codes are stored internally; result bodies and raw errors are not logged.
-
-Stop all workers before repository tests. Use an otherwise empty queue in a
-dedicated migrated test database; tests refuse to consume existing pending work:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command {
-    $ErrorActionPreference = 'Stop'
-    . ./scripts/local-environment.ps1
-    $settings = Read-LocalEnvironment -Root (Get-Location).Path
-    $env:OPSAI_TEST_DATABASE_URL = $settings.WORKER_DATABASE_URL
-    $env:OPSAI_WORKER_TEST_DATABASE_URL = $settings.WORKER_DATABASE_URL
-    go test -tags=integration ./internal/platform/database -count=1 -v
-    exit $LASTEXITCODE
-}
-```
-
-Require PASS rather than SKIP for device, incident creation/reads, job repository,
-and lease migration tests. Job tests use committed synthetic fixtures and separate
-connections; cleanup touches only their own records. Migration compatibility tests
-use isolated schemas rolled back afterward. Normal `go test ./...` needs no database.
-
-## Analysis result contract (Milestone 4B.1)
-
-`internal/analysis` defines version 1 with standard-library-only types and validation.
-`Decode(data []byte, incidentID string) (Result, error)` accepts one complete JSON
-result. `Validate(result Result, incidentID string) error` checks typed values.
-Both return the sanitized `ErrInvalid` on rejection, without including input.
-Results are mutable: later persistence code must validate them again before storing.
-The worker stores validated results atomically since Milestone 4B.3; since 4B.4
-incident detail decodes stored results again with `Decode` before returning them.
-
-All fields below are required, non-null, and use exactly the shown names.
-Empty arrays are allowed only where the minimum is zero; nil slices are invalid.
-
-| Field | Contract |
-| --- | --- |
-| `summary` | Nonblank string, at most 2,000 Unicode code points |
-| `primary_suspected_cause` | Nonblank string, at most 1,000 code points |
-| `contributing_factors` | 0–10 nonblank strings, at most 1,000 code points each |
-| `observed_conditions` | 1–10 strings with the same text limits |
-| `recommended_actions` | 0–10 objects containing exactly `order`, `description`, `reason` |
-| `safety_notes` | 1–10 strings with the same text limits |
-| `confidence` | Required finite number from 0 through 1, inclusive |
-| `evidence` | 1–10 objects containing exactly `source_id`, `claim` |
-
-Action order is consecutive integers starting at 1 in array order. Descriptions,
-reasons, and evidence claims are nonblank and at most 1,000 code points.
-Each evidence source must be a hyphenated UUID matching the input incident UUID
-(case-insensitive comparison). Text is preserved without trimming or normalization.
-Reference validation establishes neither factual accuracy nor a correct diagnosis.
-
-The decoder rejects unknown, duplicate (including escaped equivalent), missing,
-wrong-case, and incorrectly typed fields, null values, trailing JSON/content,
-invalid UTF-8, unpaired Unicode surrogate escapes, and NUL characters. Input is
-limited to 64 KiB before decoding, nesting to 16 containers, and the result to
-64 KiB after standard Go JSON serialization (including HTML escaping).
-`SchemaVersion` is 1; trusted metadata such as source, version, IDs, and timestamps
-is deliberately absent from result JSON and must be assigned by future consumers.
-The fake analyzer's synthetic wording and zero-confidence policy will be wired in
-4B.3; this provider-independent contract permits the full confidence range.
-
-## Analysis persistence (Milestone 4B.2)
-
-Migration `00004_create_incident_analyses.sql` adds one immutable row per incident
-with an application-generated UUID, schema version 1, trusted source `fake`, a
-JSONB result, and a database-generated timestamp. The migration preserves existing
-4A jobs and does not fabricate results for completed jobs.
-
-`JobRepository.FinishWithResult` revalidates the typed result against the incident
-ID read from the locked job row. It inserts the result and completes the currently
-owned, unexpired job in one transaction. A failed insert, completion, or commit
-leaves no partially stored state; a lost commit acknowledgement can still mean the
-transaction committed, so callers must use existing job recovery semantics.
-Since 4B.3 the worker completes successful jobs only through this operation.
-Since 4B.4 only incident detail exposes stored results.
-
-## Local validation
-
-With the [setup prerequisites](docs/Local-Automation-Setup.md) installed and private
-`.env` configured, run:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-local.ps1
-```
-
-The runner checks Go formatting, runs vet and unit tests, validates Compose,
-starts/reuses PostgreSQL with `--no-recreate`, applies forward migrations, checks
-migration status, and runs the Postman **System** folder against a temporary API
-on **127.0.0.1:18080**. It stops its own API afterward and leaves PostgreSQL running.
-The database port comes from POSTGRES_PORT (normally 5432), unless overridden with
-`-DatabasePort`; DATABASE_URL must match. Artifacts and logs remain in ignored
-`bin/`. The runner installs no tools and fails on command or assertion errors.
-
-To check without starting services or reading private configuration:
-
-```powershell
+# Formatting, vet, unit tests, and Compose checks; no services needed.
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-local.ps1 -ChecksOnly
+
+# Full local validation: also PostgreSQL, migrations, and the Postman System folder.
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-local.ps1
 ```
 
-The [versioned collection](api/postman/OpsAI%20API) includes
-System, device, and manual incident requests. Only System runs automatically:
-health and readiness status, JSON content type, and exact success envelopes.
-Readiness proves connectivity; Goose checks migrations separately. Repository
-integration tests require the explicit commands above.
+Unit tests need no database. PostgreSQL integration tests (transactions, job
+leases, stored analysis) run with an explicit build tag; see
+[repository integration tests](docs/Local-Automation-Setup.md#repository-integration-tests).
+The versioned Postman collection in [`api/postman/OpsAI API`](api/postman/OpsAI%20API)
+covers system, device, incident, and worker-result requests; only **System** runs
+automatically.
 
-The runner uses the local collection and disables run-event reporting. It does
-not publish edits, synchronize with Postman, or configure CI. Preserve existing
-collection/request IDs; cloud synchronization requires an explicit request.
+## Safety and limitations
 
-After Go changes, also apply formatting and update module metadata:
+- Fake analysis is test output only. It performs no diagnosis and must not be
+  used for operational decisions.
+- Validation checks structure and that evidence references the incident itself;
+  it does not prove a diagnosis is correct.
+- No authentication yet: the API binds to localhost by default and is meant for
+  local development.
+- Database errors and connection strings are never returned or logged.
+- Execution is at least once: a crash can repeat analysis, but at most one result
+  is stored per incident.
 
-```powershell
-gofmt -w cmd internal
-go mod tidy
-go vet ./...
-go test ./...
-docker compose --env-file .env.example config --quiet
-```
+## Project layout
 
-Unit tests require no container. They cover configuration, logging, HTTP contracts,
-readiness success/failure and cancellation, and graceful HTTP shutdown. Database
-health, migrations, and live readiness must be checked separately using the setup
-commands; passing unit tests alone does not prove PostgreSQL connectivity.
+| Path | Contents |
+| --- | --- |
+| `cmd/api`, `cmd/worker` | Entry points: configuration, wiring, graceful shutdown |
+| `internal/device`, `internal/incident` | Domain models, validation, and services |
+| `internal/analysis` | Versioned analysis contract and strict decoder |
+| `internal/worker` | Job processing, retry policy, fake analyzer |
+| `internal/platform/database` | Connection pool and PostgreSQL repositories (`dbgen` is generated by sqlc) |
+| `internal/transport/http` | Handlers, JSON envelopes, and server settings |
+| `internal/config`, `internal/platform/logging` | Environment configuration and `log/slog` setup |
+| `db/migrations`, `db/queries` | Goose migrations and sqlc queries |
+| `scripts/` | Local startup, worker, and validation scripts |
 
-For milestone status, verification evidence, and remaining review work, see
-[the task list](docs/Tasks.md).
+Domain and service code do not depend on HTTP or PostgreSQL. Each package defines
+small interfaces only where it consumes them; Go satisfies interfaces implicitly,
+so `pgxpool.Pool` and test doubles both fit. `context.Context` carries deadlines
+and cancellation across every operation. The pool allows 10 connections (five-minute
+idle limit, one-hour lifetime); HTTP timeouts are 5 seconds for headers, 10 seconds
+for reads and writes, and 60 seconds for idle connections.
 
-References: [pgxpool](https://pkg.go.dev/github.com/jackc/pgx/v5/pgxpool),
-[Goose](https://pressly.github.io/goose/documentation/cli-commands/), and
-[sqlc configuration](https://docs.sqlc.dev/en/latest/reference/config.html).
+## Roadmap
+
+Planned work from the [project blueprint](docs/OpsAI-Project-Blueprint.md):
+
+- Real AI provider with a versioned prompt, structured output, and tool calling.
+- Incident lifecycle transitions (analyzing, analyzed, analysis failed).
+- Retrieval of similar resolved incidents, engineer review, and resolution.
+- Authentication and roles, MQTT telemetry, OpenAPI docs, and CI.
+
+Milestone status is tracked in [docs/Tasks.md](docs/Tasks.md). Contributor rules
+are in [AGENTS.md](AGENTS.md).
+
+## License
+
+[MIT](LICENSE)

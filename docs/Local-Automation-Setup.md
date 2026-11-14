@@ -50,6 +50,22 @@ try {
 The first installation/run needs network access for Go modules and the PostgreSQL
 image. sqlc is not needed for startup because its generated Go files are included.
 
+Only when you change SQL in `db/queries` or `db/migrations`, install the pinned
+sqlc CLI the same way and regenerate. Never edit `internal/platform/database/dbgen`
+by hand:
+
+```powershell
+$previousGoBin = $env:GOBIN
+try {
+    $env:GOBIN = Join-Path (Get-Location) 'bin'
+    go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.30.0
+    if ($LASTEXITCODE -ne 0) { throw 'sqlc installation failed.' }
+} finally {
+    $env:GOBIN = $previousGoBin
+}
+.\bin\sqlc.exe generate -f db/sqlc.yaml
+```
+
 ## 3. Configure private .env once
 
 Create it only if it does not exist:
@@ -131,7 +147,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-local.ps1
 It checks Go formatting, runs vet and unit tests, validates Compose, starts/reuses
 PostgreSQL, applies forward migrations, and runs the Postman **System** folder
 against a temporary API on port 18080. That API stops afterward. PostgreSQL stays
-running; build artifacts and API logs remain in ignored `bin/`.
+running; build artifacts and API logs remain in ignored `bin/`. Containers are
+reused with `--no-recreate`. The database port comes from POSTGRES_PORT unless you
+pass `-DatabasePort`; DATABASE_URL must match. The runner installs no tools, uses
+only the local collection, and never publishes edits; cloud synchronization needs
+an explicit request, and existing collection/request IDs must be preserved.
 
 Expect two requests, seven assertions, zero failures, and
 `Local validation passed`. Local Postman CLI may print cloud-login messages;
@@ -145,8 +165,68 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-local.ps1 -Che
 ```
 
 This needs Go and Docker CLI, but no database, Goose, or Postman. It uses example
-configuration only. Repository integration tests are separate; see the README.
-A skipped integration test is not evidence that the transaction works.
+configuration only. The runner checks formatting but does not run `gofmt -w` or
+`go mod tidy`; after Go changes also run:
+
+```powershell
+gofmt -w cmd internal
+go mod tidy
+go vet ./...
+go test ./...
+docker compose --env-file .env.example config --quiet
+```
+
+Unit tests need no database. A passing System folder or unit test run does not
+prove PostgreSQL behavior; use the repository integration tests below.
+
+### Repository integration tests
+
+These tests need the explicit `integration` build tag, a running PostgreSQL with
+all migrations applied (including 00004), and `OPSAI_TEST_DATABASE_URL`. Without
+the URL they report SKIP, and a skipped test is not evidence that a transaction
+works: require PASS. These commands load private `.env` in an isolated process
+and print no credentials.
+
+Device, incident creation, and incident read tests against the normal database:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command {
+    $ErrorActionPreference = 'Stop'
+    . ./scripts/local-environment.ps1
+    $settings = Read-LocalEnvironment -Root (Get-Location).Path
+    $env:OPSAI_TEST_DATABASE_URL = $settings.DATABASE_URL
+    go test -tags=integration ./internal/platform/database `
+        -run 'Test(DeviceRepository|IncidentRepository|IncidentReads)Integration' -count=1 -v
+    exit $LASTEXITCODE
+}
+```
+
+The full suite, including job, worker, and migration tests, against the
+[isolated worker database](#isolated-fake-worker). Stop all workers first; the job
+tests refuse to run while pending or running work exists:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command {
+    $ErrorActionPreference = 'Stop'
+    . ./scripts/local-environment.ps1
+    $settings = Read-LocalEnvironment -Root (Get-Location).Path
+    $env:OPSAI_TEST_DATABASE_URL = $settings.WORKER_DATABASE_URL
+    $env:OPSAI_WORKER_TEST_DATABASE_URL = $settings.WORKER_DATABASE_URL
+    go test -tags=integration ./internal/platform/database -count=1 -v
+    exit $LASTEXITCODE
+}
+```
+
+With [terminal-only configuration](#alternative-terminal-only-configuration), set
+`$env:OPSAI_TEST_DATABASE_URL = $env:DATABASE_URL` and run the same `go test` line.
+
+What the tests do to data: device and incident-read tests use rolled-back
+fixtures. The incident creation test commits synthetic records, checks visibility
+from another connection, forces a failed job insert to prove rollback, rejects
+duplicate jobs, and checks device deletion protection, then deletes only its own
+rows. Job and worker tests use committed synthetic fixtures on separate
+connections and clean up only their own records; migration compatibility tests use
+isolated schemas that are rolled back.
 
 Parser tests, syntax checks, and ChecksOnly have passed. The full runner using
 private configuration also passed database health, migrations, readiness, and
@@ -207,10 +287,12 @@ If a private `.env` exists, its values still take precedence.
 | Formatting check failed | Run `gofmt -w cmd internal`, review changes, then rerun. |
 | Temporary API exits | Inspect ignored `bin/check-*.stderr.log` locally; redact sensitive content before sharing. |
 
-## Isolated fake worker (Milestone 4A)
+## Isolated fake worker
 
 The API startup command is unchanged. The fake worker is a separate, explicit
-process and must not consume the normal development queue.
+process and must not consume the normal development queue. How it processes jobs,
+its safety rules, and all settings are described in
+[Worker and analysis](Worker-and-Analysis.md).
 
 1. Start the existing PostgreSQL container using normal API startup. Create a
    dedicated database once, using the container's configured user:
@@ -226,14 +308,14 @@ process and must not consume the normal development queue.
 2. Add `WORKER_ANALYZER=fake` and `WORKER_DATABASE_URL` to private `.env`.
    Use your existing local credentials and the separate database name in the URL.
    Leave DATABASE_URL pointing to the normal API database. Other worker settings
-   are optional; see the [configuration table](../README.md#fake-worker-milestone-4a).
+   are optional; see the [configuration table](Worker-and-Analysis.md#configuration).
    Explicit values in .env override terminal values, including blank values.
 
 3. Apply forward migrations to the separate database, then start the worker:
 
-   Stop every older worker process first. Do not run 4A and 4B.3 worker versions
-   against the same queue: an older worker can complete a job without saving its
-   analysis result.
+   Stop every older worker process first and rebuild after pulling changes. Do not
+   run different worker versions against the same queue: an older worker can
+   complete a job without saving its analysis result.
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-worker.ps1 -MigrateOnly
@@ -288,7 +370,7 @@ submit several incidents; correlate job IDs/attempts in safe logs to check each
 lease has one owner. A stale process may still execute after expiry, but cannot
 write over a replacement's claim.
 
-Stop all workers before the [worker repository tests](../README.md#fake-worker-milestone-4a).
+Stop all workers before the [repository integration tests](#repository-integration-tests).
 They require an empty pending/running queue and clean up only their own fixtures.
 Use a fresh dedicated database for tests if a demo left pending work; never empty
 the normal development queue for testing. Test databases and demo records remain

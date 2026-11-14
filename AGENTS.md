@@ -6,7 +6,9 @@ source of truth: `CLAUDE.md` only imports it for Claude Code, so edit rules here
 ## Scope
 
 Read [the project blueprint](docs/OpsAI-Project-Blueprint.md) completely before
-changing the project. Use [the README](README.md) for implemented behavior and
+changing the project. Use [the README](README.md) for the product overview,
+[the API reference](docs/API-Reference.md) and
+[the worker and analysis guide](docs/Worker-and-Analysis.md) for implemented behavior, and
 [the setup guide](docs/Local-Automation-Setup.md) for local commands.
 
 ### Authorized work
@@ -152,7 +154,7 @@ Use -ChecksOnly for formatting, vet, unit tests, and Compose configuration check
 without starting services. The runner checks formatting but does not run gofmt -w
 or go mod tidy; it does not replace those required steps after Go changes.
 Device and incident repository integration tests are separate: use the explicit integration
-build tag and OPSAI_TEST_DATABASE_URL as documented in README.md. A passing System
+build tag and OPSAI_TEST_DATABASE_URL as documented in the setup guide. A passing System
 folder does not establish device API or repository integration coverage.
 Preserve collection/request IDs and review related local collection changes with
 API changes. Cloud publication and synchronization require a separate user request.

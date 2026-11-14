@@ -46,18 +46,18 @@ JSON content type, and the response envelope, UUID, and status values.
 Run **Incidents - Manual** in order, or send its seven requests individually in that
 order. It creates its own device, independent of the device CRUD folder and its
 cleanup. After an incident references a device, deleting that device returns
-**409 Conflict**. The cloud collection now includes the 3B read requests and the
-4B.4 worker-result folder and detail assertions, following explicitly requested syncs. Refresh the collection to see them. Create Incident
+**409 Conflict**. The cloud collection includes the incident read requests, detail assertions, and
+the worker-result folder, following explicitly requested syncs. Refresh the collection to see them. Create Incident
 saves `incident_id` for the detail request. Future edits still require explicit sync.
 
 Incident requests create persistent records. Repeating POST creates another
 incident and job. `queued` means the job is stored. Normal startup runs only the
-API. The optional [4A fake worker](../README.md#fake-worker-milestone-4a) runs
+API. The optional [fake worker](Worker-and-Analysis.md) runs
 against a separate test database and creates no AI findings. Detail assertions
 allow queued/running/completed/failed while incident status remains open, and
 require `analysis` to be null unless the job is completed. To see a stored fake
 result, run **Incidents - Worker Result** against the
-[isolated worker setup](Local-Automation-Setup.md#isolated-fake-worker-milestone-4a);
+[isolated worker setup](Local-Automation-Setup.md#isolated-fake-worker);
 it fails without a running worker.
 HTTP assertions do not replace the repository transaction integration tests.
 
