@@ -28,6 +28,11 @@ func TestLoadWorker(t *testing.T) {
 	if err != nil || cfg.Policy.MaxAttempts != 4 || cfg.Fake.Outcome != "transient-once" {
 		t.Fatal("worker overrides failed")
 	}
+	t.Setenv("WORKER_FAKE_OUTCOME", "invalid-output")
+	cfg, err = LoadWorker()
+	if err != nil || cfg.Fake.Outcome != "invalid-output" {
+		t.Fatal("invalid output test mode rejected")
+	}
 }
 func TestRejectUnsafeWorkerConfiguration(t *testing.T) {
 	for _, tc := range []struct{ key, val string }{

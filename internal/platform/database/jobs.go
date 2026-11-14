@@ -72,6 +72,45 @@ func (r *JobRepository) Claim(ctx context.Context) (worker.Job, error) {
 	}
 	return job, nil
 }
+
+func (r *JobRepository) LoadAnalysisInput(ctx context.Context, job worker.Job) (worker.AnalysisInput, error) {
+	if job.Attempt < 1 {
+		return worker.AnalysisInput{}, worker.ErrOwnership
+	}
+	id, err := uuid(job.ID)
+	if err != nil {
+		return worker.AnalysisInput{}, worker.ErrOwnership
+	}
+	token, err := uuid(job.Token)
+	if err != nil {
+		return worker.AnalysisInput{}, worker.ErrOwnership
+	}
+	ctx, cancel := context.WithTimeout(ctx, r.policy.DatabaseTimeout)
+	defer cancel()
+	row, err := dbgen.New(r.db).GetClaimedAnalysisInput(ctx, dbgen.GetClaimedAnalysisInputParams{
+		JobID: id, ClaimToken: token,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return worker.AnalysisInput{}, worker.ErrOwnership
+	}
+	if err != nil {
+		return worker.AnalysisInput{}, worker.ErrRepository
+	}
+	input := worker.AnalysisInput{
+		IncidentID: uuidString(row.ID), Attempt: job.Attempt, Title: row.Title,
+		Description: row.Description, Severity: row.Severity, RawLogs: row.RawLogs,
+	}
+	if row.AlarmCode.Valid {
+		value := row.AlarmCode.String
+		input.AlarmCode = &value
+	}
+	if row.OccurredAt.Valid {
+		value := row.OccurredAt.Time
+		input.OccurredAt = &value
+	}
+	return input, nil
+}
+
 func (r *JobRepository) Finish(ctx context.Context, job worker.Job, outcome worker.Outcome) error {
 	id, err := uuid(job.ID)
 	if err != nil {

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"log/slog"
 	"time"
+
+	"github.com/knyongki/opsai-incident-platform/internal/analysis"
 )
 
 var (
@@ -20,13 +22,26 @@ type Job struct {
 	ID, IncidentID, Token string
 	Attempt               int
 }
+type AnalysisInput struct {
+	IncidentID  string
+	Attempt     int
+	Title       string
+	Description string
+	AlarmCode   *string
+	Severity    string
+	RawLogs     []string
+	OccurredAt  *time.Time
+}
+
 type Repository interface {
 	Claim(context.Context) (Job, error)
+	LoadAnalysisInput(context.Context, Job) (AnalysisInput, error)
 	Finish(context.Context, Job, Outcome) error
+	FinishWithResult(context.Context, Job, analysis.Result) error
 	Recover(context.Context) error
 }
 type Analyzer interface {
-	Analyze(context.Context, Job) error
+	Analyze(context.Context, AnalysisInput) ([]byte, error)
 }
 
 type Outcome struct {
@@ -57,8 +72,9 @@ func (p Policy) Validate() error {
 	if p.RetryCap < p.RetryBase {
 		return errors.New("JOB_RETRY_CAP must be at least JOB_RETRY_BASE")
 	}
-	if p.Lease <= p.AttemptTimeout+2*p.DatabaseTimeout {
-		return errors.New("JOB_LEASE must exceed attempt timeout plus two database timeouts")
+	// The lease starts at claim and must outlast claim, input load, analysis, and completion.
+	if p.Lease <= p.AttemptTimeout+3*p.DatabaseTimeout {
+		return errors.New("JOB_LEASE must exceed attempt timeout plus three database timeouts")
 	}
 	return nil
 }
@@ -101,7 +117,8 @@ func ValidOutcome(o Outcome) bool {
 		return false
 	}
 	switch o.Code {
-	case "ANALYSIS_TIMEOUT", "ANALYSIS_TRANSIENT", "ANALYSIS_PERMANENT":
+	case "ANALYSIS_TIMEOUT", "ANALYSIS_TRANSIENT", "ANALYSIS_PERMANENT", "ANALYSIS_INVALID_OUTPUT",
+		"ANALYSIS_INPUT_UNAVAILABLE":
 		return true
 	}
 	return false
@@ -148,25 +165,72 @@ func (w *Worker) Step(ctx context.Context) error {
 		return err
 	}
 
+	dbctx, cancel = context.WithTimeout(ctx, w.policy.DatabaseTimeout)
+	input, err := w.repo.LoadAnalysisInput(dbctx, job)
+	cancel()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if errors.Is(err, ErrRepository) {
+		// Release the claim as a retryable failure instead of holding it until lease expiry.
+		// If this also fails, recovery still reclaims the job after its lease.
+		dbctx, cancel = context.WithTimeout(ctx, w.policy.DatabaseTimeout)
+		releaseErr := w.repo.Finish(dbctx, job, w.policy.Failure(job.Attempt, "ANALYSIS_INPUT_UNAVAILABLE", true))
+		cancel()
+		if releaseErr != nil {
+			w.logger.Warn("claimed job release failed; awaiting lease recovery", "job_id", job.ID,
+				"error_code", "JOB_RELEASE_FAILED")
+		}
+		return err
+	}
+	if err != nil {
+		return err
+	}
 	started := time.Now()
-	w.logger.Info("fake analysis started", "job_id", job.ID, "incident_id", job.IncidentID, "attempt", job.Attempt)
+	w.logger.Info("fake analysis started", "job_id", job.ID, "incident_id", input.IncidentID, "attempt", job.Attempt)
 	actx, stop := context.WithTimeout(ctx, w.policy.AttemptTimeout)
-	err = w.analyzer.Analyze(actx, job)
+	output, analysisErr := w.analyzer.Analyze(actx, input)
 	// A late success cannot turn an expired attempt into success.
 	if actx.Err() != nil {
-		err = actx.Err()
+		analysisErr = actx.Err()
 	}
 	stop()
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	outcome := w.policy.Result(job.Attempt, err)
+	var result *analysis.Result
+	var outcome Outcome
+	if analysisErr != nil {
+		outcome = w.policy.Result(job.Attempt, analysisErr)
+	} else {
+		validated, err := analysis.Decode(output, input.IncidentID)
+		if err != nil {
+			outcome = Outcome{Status: "failed", Code: "ANALYSIS_INVALID_OUTPUT"}
+		} else {
+			result = &validated
+			outcome = Outcome{Status: "completed"}
+		}
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	dbctx, cancel = context.WithTimeout(ctx, w.policy.DatabaseTimeout)
 	defer cancel()
-	if err := w.repo.Finish(dbctx, job, outcome); err != nil {
+	if result != nil {
+		err = w.repo.FinishWithResult(dbctx, job, *result)
+		// The rolled-back transaction rejected the result; record it as invalid output.
+		// Reusing dbctx keeps both calls within one database timeout of the lease budget.
+		if errors.Is(err, analysis.ErrInvalid) {
+			outcome = Outcome{Status: "failed", Code: "ANALYSIS_INVALID_OUTPUT"}
+			err = w.repo.Finish(dbctx, job, outcome)
+		}
+	} else {
+		err = w.repo.Finish(dbctx, job, outcome)
+	}
+	if err != nil {
 		return err
 	}
-	w.logger.Info("fake analysis finished", "job_id", job.ID, "incident_id", job.IncidentID,
+	w.logger.Info("fake analysis finished", "job_id", job.ID, "incident_id", input.IncidentID,
 		"attempt", job.Attempt, "duration_ms", time.Since(started).Milliseconds(),
 		"status", outcome.Status, "error_code", outcome.Code)
 	return nil

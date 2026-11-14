@@ -231,6 +231,10 @@ process and must not consume the normal development queue.
 
 3. Apply forward migrations to the separate database, then start the worker:
 
+   Stop every older worker process first. Do not run 4A and 4B.3 worker versions
+   against the same queue: an older worker can complete a job without saving its
+   analysis result.
+
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-worker.ps1 -MigrateOnly
    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-worker.ps1
@@ -260,13 +264,15 @@ process and must not consume the normal development queue.
    ```
 
 5. Set Postman base_url to `http://127.0.0.1:18082` and run Incidents - Manual.
-   POST still returns queued. Subsequent GET requests may show running/completed
-   while incident status stays open. Completed here means fake execution only.
+   POST still returns queued. The worker stores a validated synthetic result
+   atomically with job completion; incident status stays open. Until Milestone
+   4B.4, GET detail does not expose stored results.
    Restore Postman's base_url to your usual API afterward.
 
 For a visible transition, set WORKER_FAKE_DELAY to 5s before starting the worker.
-Use transient-once to demonstrate a retry, permanent for terminal failure, or
-transient for attempt exhaustion. Keep delay below JOB_ATTEMPT_TIMEOUT unless
+Use transient-once to demonstrate retry then success, permanent for terminal
+failure, invalid-output to verify rejected output creates no result, or transient
+for attempt exhaustion. Keep delay below JOB_ATTEMPT_TIMEOUT unless
 testing timeouts. Restart workers after changing settings; use the same retry and
 lease settings in every worker process.
 

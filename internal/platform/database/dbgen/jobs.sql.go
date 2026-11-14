@@ -87,6 +87,46 @@ func (q *Queries) FinishAnalysisJob(ctx context.Context, arg FinishAnalysisJobPa
 	return result.RowsAffected(), nil
 }
 
+const getClaimedAnalysisInput = `-- name: GetClaimedAnalysisInput :one
+SELECT i.id, i.title, i.description, i.alarm_code, i.severity, i.raw_logs, i.occurred_at
+FROM analysis_jobs j
+JOIN incidents i ON i.id = j.incident_id
+WHERE j.id = $1::uuid
+    AND j.claim_token = $2::uuid
+    AND j.status = 'running'
+    AND j.lease_expires_at > clock_timestamp()
+`
+
+type GetClaimedAnalysisInputParams struct {
+	JobID      pgtype.UUID
+	ClaimToken pgtype.UUID
+}
+
+type GetClaimedAnalysisInputRow struct {
+	ID          pgtype.UUID
+	Title       string
+	Description string
+	AlarmCode   pgtype.Text
+	Severity    string
+	RawLogs     []string
+	OccurredAt  pgtype.Timestamptz
+}
+
+func (q *Queries) GetClaimedAnalysisInput(ctx context.Context, arg GetClaimedAnalysisInputParams) (GetClaimedAnalysisInputRow, error) {
+	row := q.db.QueryRow(ctx, getClaimedAnalysisInput, arg.JobID, arg.ClaimToken)
+	var i GetClaimedAnalysisInputRow
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.AlarmCode,
+		&i.Severity,
+		&i.RawLogs,
+		&i.OccurredAt,
+	)
+	return i, err
+}
+
 const insertIncidentAnalysis = `-- name: InsertIncidentAnalysis :exec
 INSERT INTO incident_analyses (id, incident_id, schema_version, source, result)
 VALUES ($1::uuid, $2::uuid, $3::integer,

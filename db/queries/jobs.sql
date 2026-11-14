@@ -17,6 +17,15 @@ RETURNING j.*;
 -- name: LockAnalysisJob :one
 SELECT * FROM analysis_jobs WHERE id = $1 FOR UPDATE;
 
+-- name: GetClaimedAnalysisInput :one
+SELECT i.id, i.title, i.description, i.alarm_code, i.severity, i.raw_logs, i.occurred_at
+FROM analysis_jobs j
+JOIN incidents i ON i.id = j.incident_id
+WHERE j.id = sqlc.arg(job_id)::uuid
+    AND j.claim_token = sqlc.arg(claim_token)::uuid
+    AND j.status = 'running'
+    AND j.lease_expires_at > clock_timestamp();
+
 -- name: FinishAnalysisJob :execrows
 UPDATE analysis_jobs
 SET status = sqlc.arg(next_status)::text,

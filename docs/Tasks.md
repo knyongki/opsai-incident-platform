@@ -14,7 +14,7 @@ the [README](../README.md) describes implemented behavior and operating instruct
 | 3A - Incident creation and durable jobs | Finished | Reviewed, verified, and committed as b9c4e4d |
 | 3B - Incident list/detail | Finished | Read APIs implemented and reviewed; unit, integration, Postman, and live pagination checks passed |
 | 4A - Durable worker foundation | Finished | Fake worker, leases, recovery/retries, and validation passed; user accepted; committed as e2e9d1c |
-| 4B - Structured analysis results | In progress | 4B.1 Finished; 4B.2 In review; 4B.3–4B.4 remain Planned |
+| 4B - Structured analysis results | In progress | 4B.1-4B.3 Finished; 4B.4 Planned |
 
 The full incident and AI workflows remain on the blueprint. Finishing 4A does
 not complete the blueprint's Milestone 4: validated, stored AI results remain later work.
@@ -41,8 +41,7 @@ Lasting contracts and commands are in the [incident read documentation](../READM
 **Structured analysis validation and persistence, using the fake analyzer.**
 
 Baseline verified: 4A is committed as e2e9d1c and 4B.1 is committed as 2e2bd96.
-The user authorized 4B.1 and 4B.2 in separate work sessions. The 4B.2 migration is
-approved; worker integration and API changes still need separate authorization.
+The user authorized the parts in separate work sessions. Migration 00004 was approved for 4B.2. Worker integration is authorized for 4B.3; API changes remain separately scoped to 4B.4.
 
 ### Delivery in small parts
 
@@ -54,8 +53,8 @@ automatically continue through all four parts.
 | Part | Status | Deliverable | Depends on |
 | --- | --- | --- | --- |
 | 4B.1 - Result contract and validation | Finished | Committed typed result contract, strict decoder, semantic validation, tests, and README documentation | Completed 4A |
-| 4B.2 - Database persistence | In review | Approved migration, sqlc insert, atomic result/job completion, and PostgreSQL integration tests passed | Finished 4B.1 |
-| 4B.3 - Worker integration | Planned | Fake structured output, input loading, validation, and atomic result completion in the running worker | Finished 4B.2 |
+| 4B.2 - Database persistence | Finished | Migration 00004, sqlc insert, atomic result/job completion, and PostgreSQL integration tests; committed as 66f69a5 | Finished 4B.1 |
+| 4B.3 - Worker integration | Finished | Fake structured output, input loading, validation, and atomic result completion in the running worker; accepted 2026-11-14 | Finished 4B.2 |
 | 4B.4 - Detail API and Postman | Planned | Detail analysis field, local collection assertions, documentation, and end-to-end checks | Finished 4B.3 |
 
 The sections below describe the final combined design. Intermediate parts expose
@@ -64,8 +63,7 @@ Milestone 4B becomes Finished only after all four parts pass review.
 
 ### Outcome and scope
 
-Today a completed job has no analysis result. In 4B, a newly processed successful
-job must have exactly one validated, durable result that the API can return.
+4B.3 connects the fake worker to 4B.2 atomic persistence. Successful new jobs now have a validated result; the API remains unchanged until 4B.4.
 
 - Define a versioned analysis contract and strict validation in a small
   provider-independent `internal/analysis` package.
@@ -264,23 +262,106 @@ config. No credentials were displayed or changed.
 
 Done when repository tests prove that one validated result and completed job
 commit together, with neither partial writes nor stale-owner overwrites.
-The runtime worker remains on 4A behavior; the new operation is exercised directly
-by integration tests. Do not add the detail API field yet.
+4B.2 added atomic persistence without rewiring the worker; 4B.3 now connects those operations. Do not add the detail API field until 4B.4.
 
-#### 4B.3 - Worker integration
+#### 4B.3 - Worker integration (Finished)
 
-- [ ] Extend analyzer input/output, load the claimed incident, and return deterministic
-  synthetic JSON from the fake analyzer.
-- [ ] Validate before storage and connect successful processing to 4B.2 atomic
-  completion; remove the old success-without-result runtime path.
-- [ ] Preserve retries/timeouts/recovery; add invalid-output scenarios and safe errors.
-- [ ] Stop/rebuild/restart workers for the cutover. Run unit/integration tests and
-  live synthetic success/failure checks; document changed fake-worker behavior.
+Connect the fake worker to the result contract and the `FinishWithResult`
+repository operation from 4B.2. This part is implemented,
+verified, and accepted by the user on 2026-11-14.
 
-Done when a new API-created incident is processed into one validated database
-result, invalid output produces no result, and incident status stays open.
-Verify persistence through repository tests or local database inspection; the
-existing GET response does not expose the result until 4B.4.
+**Processing flow**
+
+1. After claiming a job, load only that job's incident fields using its ID and
+   ownership token. Bound the query with the existing database timeout and use
+   existing incident field limits. Do not load device history, similar incidents,
+   documents, or any retrieval context.
+2. Pass a small incident input to the analyzer. Change the fake analyzer to return
+   raw JSON so the worker exercises the same strict decoder used for future output.
+3. Return deterministic synthetic text only: clearly say no diagnosis was made,
+   use confidence 0, and reference the claimed incident ID as the sole evidence.
+   Do not invent equipment-specific causes or operational advice.
+4. Decode and validate the analyzer JSON with `internal/analysis`. On success,
+   call `FinishWithResult`; remove the worker's success path that completes jobs
+   without a result.
+5. Keep transient analyzer and input-loading errors on the existing bounded retry
+   path. Treat invalid JSON or semantic validation failure as terminal, using the
+   safe code `ANALYSIS_INVALID_OUTPUT`. Keep permanent errors terminal. Never log
+   or persist raw invalid output.
+6. Preserve the 4A claim token, lease expiry guard, recovery, timeouts, bounded
+   shutdown, and cancellation behavior. If input loading fails or is cancelled,
+   do not invoke the analyzer with partial data. Failure, retry, expiry, and
+   cancellation paths must not create an analysis row.
+
+**Implementation checklist**
+
+- [x] Add the minimal worker analysis input type and update the consumer-owned
+  analyzer/repository interfaces for input loading and raw JSON output.
+- [x] Add a bounded, claim-checked incident-input query/operation. Do not add a
+  migration or third-party dependency.
+- [x] Update the fake analyzer with deterministic valid output and an explicit
+  invalid-output test mode. Keep existing success, transient, transient-once,
+  and permanent scenarios working.
+- [x] Validate output before persistence. Route success to `FinishWithResult`;
+  route invalid output to terminal failure with `ANALYSIS_INVALID_OUTPUT`.
+- [x] Add worker unit tests for input forwarding, valid and invalid output,
+  analyzer/read failures, retry classification, cancellation, and safe errors.
+- [x] Add PostgreSQL worker integration tests for valid success, invalid output,
+  transient-then-success, retry exhaustion, and absence of partial results.
+- [x] Document the new fake-worker flow and manual checks. Preserve System-only
+  Postman automation and leave API responses and the collection unchanged.
+- [x] Document that 4A worker processes must stop before using 4B.3; mixed worker
+  versions are unsupported because 4A can complete a job without a result.
+
+**Acceptance checks**
+
+Implementation evidence: the worker loads only the current incident through a
+claim-token and lease-checked query, validates raw fake JSON, and stores success
+through `FinishWithResult`. Invalid output is terminal with
+`ANALYSIS_INVALID_OUTPUT`; retries and cancellation keep the 4A ownership rules.
+PostgreSQL tests exercise current-incident input/null fields, stale-token rejection,
+success with one `source=fake` result and open incident, invalid output with no result,
+and transient retry followed by one result. README and setup guidance describe the
+new behavior and invalid-output mode. HTTP and Postman files were not changed.
+
+Validation passed: `gofmt -w cmd internal`, `go mod tidy`, `sqlc generate`,
+`go vet ./...`, `go test -count=1 ./...`, `git diff --check`, Compose validation,
+and the full tagged PostgreSQL database suite. `scripts/check-local.ps1` passed
+container health, migrations, API readiness, and System Postman assertions.
+
+Review fixes (2026-11-14): the lease must now exceed attempt timeout plus three
+database timeouts (claim, input load, completion); an input-load storage failure
+releases the claim as retryable `ANALYSIS_INPUT_UNAVAILABLE`; a result rejected
+inside the completion transaction is recorded as `ANALYSIS_INVALID_OUTPUT`. Unit
+tests cover each fix; Go checks, `check-local.ps1`, and the tagged suite passed after them.
+
+Live check (2026-11-14): with the separate worker process and a second API on
+127.0.0.1:18082 using the `_worker_test` database, Postman Incidents - Manual
+created incidents. In `success` mode GET detail showed `analysis_status=completed`;
+in `invalid-output` mode, `failed`. After restarting that API, the completed
+incident still read as `completed`; incidents stayed open and response shapes were
+unchanged. Job/result rows and the invalid-output log error code were verified by
+the tagged integration tests, not inspected directly during the live run.
+
+- A new synthetic incident processed by the worker has a `completed` job and
+  exactly one version-1 result with `source=fake`, committed atomically; its
+  incident status remains `open`.
+- Invalid output ends in `failed` with the safe allowlisted error code, no result,
+  and no raw output in logs or API responses.
+- A transient failure followed by success stores exactly one result. Permanent
+  failure and exhausted retries store none. Existing lease/recovery/cancellation
+  checks continue to pass.
+- Input read failure or cancellation never invokes the analyzer with incomplete
+  input. Stale or expired ownership cannot write a result.
+- Normal `go test ./...` remains PostgreSQL-independent. All tagged repository
+  tests pass against the isolated migrated `_worker_test` database.
+- Manual verification creates an incident through the API configured to use the
+  worker test database, runs the fake worker, and checks job/result rows. Repeat
+  with invalid-output mode and verify failure with zero result rows. GET detail
+  does not show the result until 4B.4.
+
+Stop 4B.3 In review after checks and documentation pass. User acceptance and a
+separate commit are required before planning or starting 4B.4.
 
 #### 4B.4 - Detail API and Postman
 
@@ -360,6 +441,6 @@ and how clients distinguish fake output.
 | Old workers bypass result persistence | Stop/rebuild/restart workers during upgrade; no mixed-version execution |
 | Current one-job model grows into unplanned history | One immutable result per incident; defer reanalysis/history design |
 
-The 4B.1 contract is Finished and 4B.2 is In review. Worker integration and the
-detail API remain planned. Keep the overall 4B milestone In progress until all
+The 4B.1 contract, 4B.2 persistence, and 4B.3 worker integration are Finished;
+the 4B.4 detail API remains planned. Keep overall 4B In progress until all
 parts pass their required checks and review; mark Finished only after user acceptance.

@@ -5,6 +5,7 @@ package database
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -308,6 +309,92 @@ func TestJobRepositoryIntegration(t *testing.T) {
 		}
 		if _, err := pool.Exec(ctx, "UPDATE analysis_jobs SET claim_token=id WHERE id=$1", ids[0]); err == nil {
 			t.Fatal("pending with token accepted")
+		}
+	})
+}
+
+func TestWorkerAnalysisIntegration(t *testing.T) {
+	pool, ctx := workerTestPool(t)
+	var queued int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM analysis_jobs WHERE status IN ('pending','running')").Scan(&queued); err != nil || queued != 0 {
+		t.Fatal("worker integration requires an empty queue and no running worker")
+	}
+	p := worker.DefaultPolicy()
+	p.PollInterval = time.Millisecond
+	p.RetryBase = time.Millisecond
+	p.RetryCap = 10 * time.Millisecond
+	repo, err := NewJobRepository(pool, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("analysis input is limited to current owned incident", func(t *testing.T) {
+		ids := jobFixtures(t, pool, ctx, 1)
+		jobExec(t, pool, ctx, "UPDATE analysis_jobs SET available_at='2020-01-01' WHERE id=$1", ids[0])
+		job, err := repo.Claim(ctx)
+		if err != nil {
+			t.Fatal("claim for input read failed")
+		}
+		input, err := repo.LoadAnalysisInput(ctx, job)
+		if err != nil || input.Title != "Synthetic worker incident" || input.Description != "Synthetic fixture" ||
+			input.Severity != "high" || len(input.RawLogs) != 0 || input.AlarmCode != nil || input.OccurredAt != nil {
+			t.Fatal("claimed incident input or nullable fields mismatch")
+		}
+		job.Token = integrationID(t)
+		if _, err := repo.LoadAnalysisInput(ctx, job); !errors.Is(err, worker.ErrOwnership) {
+			t.Fatal("input query accepted a stale claim token")
+		}
+	})
+	t.Run("valid fake output persists atomically", func(t *testing.T) {
+		ids := jobFixtures(t, pool, ctx, 1)
+		jobExec(t, pool, ctx, "UPDATE analysis_jobs SET available_at='2020-01-01' WHERE id=$1", ids[0])
+		w, err := worker.New(repo, worker.FakeAnalyzer{Outcome: "success"}, p, slog.Default())
+		if err != nil || w.Step(ctx) != nil {
+			t.Fatal("worker step failed")
+		}
+		assertJob(t, pool, ctx, ids[0], "completed", 1)
+		var count int
+		var source string
+		var status string
+		if err := pool.QueryRow(ctx, `SELECT count(a.id),min(a.source) FROM incident_analyses a JOIN analysis_jobs j ON j.incident_id=a.incident_id WHERE j.id=$1`, ids[0]).Scan(&count, &source); err != nil || count != 1 || source != "fake" {
+			t.Fatal("valid fake result was not stored exactly once")
+		}
+		if err := pool.QueryRow(ctx, `SELECT i.status FROM incidents i JOIN analysis_jobs j ON j.incident_id=i.id WHERE j.id=$1`, ids[0]).Scan(&status); err != nil || status != "open" {
+			t.Fatal("worker changed incident lifecycle")
+		}
+	})
+	t.Run("invalid output fails without storing raw result", func(t *testing.T) {
+		ids := jobFixtures(t, pool, ctx, 1)
+		jobExec(t, pool, ctx, "UPDATE analysis_jobs SET available_at='2020-01-01' WHERE id=$1", ids[0])
+		w, err := worker.New(repo, worker.FakeAnalyzer{Outcome: "invalid-output"}, p, slog.Default())
+		if err != nil || w.Step(ctx) != nil {
+			t.Fatal("invalid result should be finalized as a terminal job failure")
+		}
+		assertJob(t, pool, ctx, ids[0], "failed", 1)
+		var code string
+		var count int
+		if err := pool.QueryRow(ctx, `SELECT last_error FROM analysis_jobs WHERE id=$1`, ids[0]).Scan(&code); err != nil || code != "ANALYSIS_INVALID_OUTPUT" {
+			t.Fatal("invalid output did not use the safe failure code")
+		}
+		if err := pool.QueryRow(ctx, `SELECT count(a.id) FROM incident_analyses a JOIN analysis_jobs j ON j.incident_id=a.incident_id WHERE j.id=$1`, ids[0]).Scan(&count); err != nil || count != 0 {
+			t.Fatal("invalid result was persisted")
+		}
+	})
+	t.Run("transient failure can retry and persist one result", func(t *testing.T) {
+		ids := jobFixtures(t, pool, ctx, 1)
+		jobExec(t, pool, ctx, "UPDATE analysis_jobs SET available_at='2020-01-01' WHERE id=$1", ids[0])
+		w, err := worker.New(repo, worker.FakeAnalyzer{Outcome: "transient-once"}, p, slog.Default())
+		if err != nil || w.Step(ctx) != nil {
+			t.Fatal("transient step failed")
+		}
+		assertJob(t, pool, ctx, ids[0], "pending", 1)
+		jobExec(t, pool, ctx, "UPDATE analysis_jobs SET available_at='2020-01-01' WHERE id=$1", ids[0])
+		if w.Step(ctx) != nil {
+			t.Fatal("retry step failed")
+		}
+		assertJob(t, pool, ctx, ids[0], "completed", 2)
+		var count int
+		if err := pool.QueryRow(ctx, `SELECT count(a.id) FROM incident_analyses a JOIN analysis_jobs j ON j.incident_id=a.incident_id WHERE j.id=$1`, ids[0]).Scan(&count); err != nil || count != 1 {
+			t.Fatal("retry did not store exactly one result")
 		}
 	})
 }

@@ -6,12 +6,11 @@ written in Go. Implemented scope: **Milestone 1 (Go API Foundation)**,
 **Milestone 3A (Incident Creation and Durable Job Enqueueing)**, and
 **Milestone 3B (Incident List and Detail APIs)**, and
 **Milestone 4A (Durable Worker Foundation)**. The worker runs only a
-fake analyzer against a separate synthetic test database. The 4B.2 repository
-can atomically store validated results, but the worker does not call it yet. Real
-AI and worker-generated analysis results,
+fake analyzer against a separate synthetic test database. The 4B.3 worker stores
+validated synthetic results atomically with job completion. Real AI,
 incident update endpoints, MQTT, and authentication remain future work.
-Milestone 4B.1 adds the standalone [analysis result contract](#analysis-result-contract-milestone-4b1)
-for later worker integration. See the
+Milestone 4B.1 defines the [analysis result contract](#analysis-result-contract-milestone-4b1),
+used by the fake worker since 4B.3. See the
 [blueprint](docs/OpsAI-Project-Blueprint.md) and [contributor rules](AGENTS.md).
 
 ## Start locally (PowerShell)
@@ -461,7 +460,7 @@ than immediately re-executed.
 | --- | --- | --- |
 | WORKER_ANALYZER | Empty; must explicitly be fake | Enables only the fake implementation |
 | WORKER_DATABASE_URL | Required for worker | Separate localhost database ending in _worker_test |
-| WORKER_FAKE_OUTCOME | success | success, transient, permanent, or transient-once |
+| WORKER_FAKE_OUTCOME | success | success, transient, permanent, transient-once, or invalid-output |
 | WORKER_FAKE_DELAY | 100ms | Simulated work; cancellation-aware |
 | JOB_POLL_INTERVAL | 1s | Idle polling delay |
 | JOB_ATTEMPT_TIMEOUT | 30s | Analyzer deadline |
@@ -472,16 +471,22 @@ than immediately re-executed.
 | WORKER_SHUTDOWN_TIMEOUT | 10s | Maximum wait for cancellation |
 
 Policy durations must be 1ms-24h; fake delay may also be zero. Lease must exceed
-attempt timeout plus two database timeouts, and retry cap must be at least base.
+attempt timeout plus three database timeouts (claim, input load, and completion),
+and retry cap must be at least base.
 URLs allow only sslmode, connect_timeout, and application_name query parameters
 to prevent connection overrides bypassing the isolated-database check.
 
-Fake success moves only the job to completed. Incidents remain open; no analysis
-result is generated. Transient failures and attempt timeouts retry until the cap;
-permanent/unclassified failures stop immediately. The existing GET APIs show
-queued/running/completed/failed without exposing tokens, attempts, or errors.
-In this demo, completed means fake processing completed, not real findings.
-Safe error codes are stored internally; incident bodies and raw errors are not logged.
+A successful fake run validates its structured result, then stores it in the same
+transaction that completes the job. The source is labeled `fake`; the text says
+no diagnosis was performed, confidence is zero, and evidence refers only to the
+supplied incident. Incidents remain open. `invalid-output` exercises terminal
+validation failure and stores no result. Transient failures and attempt timeouts
+retry within the configured cap; permanent and invalid output stop immediately.
+A storage failure while loading the claimed incident releases the job for retry
+with `ANALYSIS_INPUT_UNAVAILABLE` instead of holding it until lease expiry; a
+result rejected inside the completion transaction is recorded as
+`ANALYSIS_INVALID_OUTPUT`. Until Milestone 4B.4, the detail API does not return stored results. Safe error
+codes are stored internally; result bodies and raw errors are not logged.
 
 Stop all workers before repository tests. Use an otherwise empty queue in a
 dedicated migrated test database; tests refuse to consume existing pending work:
@@ -510,7 +515,8 @@ use isolated schemas rolled back afterward. Normal `go test ./...` needs no data
 result. `Validate(result Result, incidentID string) error` checks typed values.
 Both return the sanitized `ErrInvalid` on rejection, without including input.
 Results are mutable: later persistence code must validate them again before storing.
-The current worker still completes without storing results; HTTP contracts are unchanged.
+The worker stores validated results atomically since Milestone 4B.3; HTTP contracts
+remain unchanged until 4B.4.
 
 All fields below are required, non-null, and use exactly the shown names.
 Empty arrays are allowed only where the minimum is zero; nil slices are invalid.
@@ -554,7 +560,7 @@ ID read from the locked job row. It inserts the result and completes the current
 owned, unexpired job in one transaction. A failed insert, completion, or commit
 leaves no partially stored state; a lost commit acknowledgement can still mean the
 transaction committed, so callers must use existing job recovery semantics.
-The running 4A worker continues using its original completion operation until 4B.3.
+Since 4B.3 the worker completes successful jobs only through this operation.
 No API response exposes stored results yet.
 
 ## Local validation
