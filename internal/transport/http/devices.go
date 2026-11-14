@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/knyongki/opsai-incident-platform/internal/device"
@@ -67,70 +66,63 @@ func decodeDevice(w http.ResponseWriter, r *http.Request) (device.Input, error) 
 	return in, nil
 }
 
-func serveDevice(logger *slog.Logger, svc DeviceService, w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-	id := strings.TrimPrefix(r.URL.Path, "/api/v1/devices")
-	collection := id == ""
-	if !collection {
-		if !strings.HasPrefix(id, "/") || strings.Contains(id[1:], "/") {
-			deviceError(logger, w, r, device.ErrNotFound)
-			return
-		}
-		id = id[1:]
-		if !device.ValidID(id) {
-			deviceError(logger, w, r, device.ErrInvalid)
-			return
+func deviceRoutes(rt router, svc DeviceService) {
+	logger := rt.logger
+	// serve gives every device operation one deadline and one error mapping.
+	serve := func(status int, call func(context.Context, http.ResponseWriter, *http.Request, string) (any, error)) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			defer cancel()
+			id := r.PathValue("id")
+			if id != "" && !device.ValidID(id) {
+				deviceError(logger, w, r, device.ErrInvalid)
+				return
+			}
+			result, err := call(ctx, w, r, id)
+			if err != nil {
+				deviceError(logger, w, r, err)
+				return
+			}
+			if status == http.StatusNoContent {
+				w.WriteHeader(status)
+				return
+			}
+			writeJSON(logger, w, status, successResponse{Data: result})
 		}
 	}
-	var result any
-	var err error
-	status := http.StatusOK
-	switch {
-	case collection && r.Method == http.MethodPost:
-		var in device.Input
-		in, err = decodeDevice(w, r)
-		if err == nil {
-			var d device.Device
-			d, err = svc.Create(ctx, in)
-			result = d
+	rt.route("/api/v1/devices", "GET, POST", map[string]http.HandlerFunc{
+		http.MethodPost: serve(http.StatusCreated, func(ctx context.Context, w http.ResponseWriter, r *http.Request, _ string) (any, error) {
+			in, err := decodeDevice(w, r)
+			if err != nil {
+				return nil, err
+			}
+			d, err := svc.Create(ctx, in)
 			if err == nil {
 				w.Header().Set("Location", "/api/v1/devices/"+d.ID)
 			}
-		}
-		status = http.StatusCreated
-	case collection && r.Method == http.MethodGet:
-		result, err = svc.List(ctx)
-	case !collection && r.Method == http.MethodGet:
-		result, err = svc.Get(ctx, id)
-	case !collection && r.Method == http.MethodPatch:
-		var in device.Input
-		in, err = decodeDevice(w, r)
-		if err == nil {
-			result, err = svc.Update(ctx, id, in)
-		}
-	case !collection && r.Method == http.MethodDelete:
-		err = svc.Delete(ctx, id)
-		status = http.StatusNoContent
-	default:
-		allow := "GET, POST"
-		if !collection {
-			allow = "GET, PATCH, DELETE"
-		}
-		w.Header().Set("Allow", allow)
-		writeJSON(logger, w, http.StatusMethodNotAllowed, errorResponse{apiError{Code: "METHOD_NOT_ALLOWED", Message: "The request method is not allowed."}})
-		return
-	}
-	if err != nil {
-		deviceError(logger, w, r, err)
-		return
-	}
-	if status == http.StatusNoContent {
-		w.WriteHeader(status)
-		return
-	}
-	writeJSON(logger, w, status, successResponse{Data: result})
+			return d, err
+		}),
+		http.MethodGet: serve(http.StatusOK, func(ctx context.Context, _ http.ResponseWriter, _ *http.Request, _ string) (any, error) {
+			return svc.List(ctx)
+		}),
+	})
+	rt.route("/api/v1/devices/{id}", "GET, PATCH, DELETE", map[string]http.HandlerFunc{
+		http.MethodGet: serve(http.StatusOK, func(ctx context.Context, _ http.ResponseWriter, _ *http.Request, id string) (any, error) {
+			return svc.Get(ctx, id)
+		}),
+		http.MethodPatch: serve(http.StatusOK, func(ctx context.Context, w http.ResponseWriter, r *http.Request, id string) (any, error) {
+			in, err := decodeDevice(w, r)
+			if err != nil {
+				return nil, err
+			}
+			return svc.Update(ctx, id, in)
+		}),
+		http.MethodDelete: serve(http.StatusNoContent, func(ctx context.Context, _ http.ResponseWriter, _ *http.Request, id string) (any, error) {
+			return nil, svc.Delete(ctx, id)
+		}),
+	})
 }
+
 func deviceError(logger *slog.Logger, w http.ResponseWriter, r *http.Request, err error) {
 	status := http.StatusInternalServerError
 	code := "INTERNAL_ERROR"
@@ -149,7 +141,8 @@ func deviceError(logger *slog.Logger, w http.ResponseWriter, r *http.Request, er
 		code = "CONFLICT"
 		message = "The device conflicts with an existing record."
 	default:
-		logger.Error("device request failed", "method", r.Method, "resource", "devices", "error_code", code)
+		logger.Error("device request failed", "request_id", requestID(r.Context()), "method", r.Method,
+			"resource", "devices", "error_code", code)
 	}
 	writeJSON(logger, w, status, errorResponse{apiError{Code: code, Message: message}})
 }

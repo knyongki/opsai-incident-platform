@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -23,60 +22,48 @@ type IncidentService interface {
 	Get(context.Context, string) (incident.Detail, error)
 }
 
-func WithIncidents(logger *slog.Logger, svc IncidentService, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		const path = "/api/v1/incidents"
-		collection := r.URL.Path == path
-		id := strings.TrimPrefix(r.URL.Path, path+"/")
-		detail := strings.HasPrefix(r.URL.Path, path+"/") && id != "" && !strings.Contains(id, "/")
-		if !collection && !detail {
-			next.ServeHTTP(w, r)
-			return
-		}
-		allowed := "GET"
-		if collection {
-			allowed = "GET, POST"
-		}
-		if r.Method != http.MethodGet && !(collection && r.Method == http.MethodPost) {
-			w.Header().Set("Allow", allowed)
-			writeJSON(logger, w, http.StatusMethodNotAllowed, errorResponse{apiError{Code: "METHOD_NOT_ALLOWED", Message: "The request method is not allowed."}})
-			return
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		defer cancel()
-		var result any
-		var err error
-		status := http.StatusOK
-		switch {
-		case r.Method == http.MethodPost:
-			var in incident.Input
-			in, err = decodeIncident(w, r)
-			if err == nil {
-				result, err = svc.Create(ctx, in)
+func incidentRoutes(rt router, svc IncidentService) {
+	logger := rt.logger
+	serve := func(status int, call func(context.Context, http.ResponseWriter, *http.Request) (any, error)) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			defer cancel()
+			result, err := call(ctx, w, r)
+			if err != nil {
+				incidentError(logger, w, r, err)
+				return
 			}
-			status = http.StatusAccepted
-		case collection:
-			var options incident.ListOptions
-			options, err = parseIncidentList(r.URL.RawQuery)
-			if err == nil {
-				result, err = svc.List(ctx, options)
+			writeJSON(logger, w, status, successResponse{Data: result})
+		}
+	}
+	rt.route("/api/v1/incidents", "GET, POST", map[string]http.HandlerFunc{
+		http.MethodPost: serve(http.StatusAccepted, func(ctx context.Context, w http.ResponseWriter, r *http.Request) (any, error) {
+			in, err := decodeIncident(w, r)
+			if err != nil {
+				return nil, err
 			}
-		default:
+			return svc.Create(ctx, in)
+		}),
+		http.MethodGet: serve(http.StatusOK, func(ctx context.Context, _ http.ResponseWriter, r *http.Request) (any, error) {
+			options, err := parseIncidentList(r.URL.RawQuery)
+			if err != nil {
+				return nil, err
+			}
+			return svc.List(ctx, options)
+		}),
+	})
+	rt.route("/api/v1/incidents/{id}", "GET", map[string]http.HandlerFunc{
+		http.MethodGet: serve(http.StatusOK, func(ctx context.Context, _ http.ResponseWriter, r *http.Request) (any, error) {
+			id := r.PathValue("id")
 			if r.URL.RawQuery != "" || !incident.ValidID(id) {
-				err = incident.ErrInvalid
-			} else {
-				result, err = svc.Get(ctx, id)
+				return nil, incident.ErrInvalid
 			}
-		}
-		if err != nil {
-			incidentError(logger, w, err)
-			return
-		}
-		writeJSON(logger, w, status, successResponse{Data: result})
+			return svc.Get(ctx, id)
+		}),
 	})
 }
 
-func incidentError(logger *slog.Logger, w http.ResponseWriter, err error) {
+func incidentError(logger *slog.Logger, w http.ResponseWriter, r *http.Request, err error) {
 	status, code, message := http.StatusInternalServerError, "INTERNAL_ERROR", "An internal error occurred."
 	switch {
 	case errors.Is(err, incident.ErrInvalid):
@@ -86,7 +73,7 @@ func incidentError(logger *slog.Logger, w http.ResponseWriter, err error) {
 	case errors.Is(err, incident.ErrNotFound):
 		status, code, message = http.StatusNotFound, "NOT_FOUND", "The incident was not found."
 	default:
-		logger.Error("incident request failed", "error_code", code)
+		logger.Error("incident request failed", "request_id", requestID(r.Context()), "error_code", code)
 	}
 	writeJSON(logger, w, status, errorResponse{apiError{Code: code, Message: message}})
 }

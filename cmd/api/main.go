@@ -41,8 +41,11 @@ func run(bootstrapLogger *slog.Logger) error {
 	}
 	// serve waits for HTTP shutdown before this deferred cleanup runs.
 	defer pool.Close()
-	server := httpapi.NewServer(cfg.HTTPAddress, logger, pool, device.NewService(database.NewDeviceRepository(pool)))
-	server.Handler = httpapi.WithIncidents(logger, incident.NewService(database.NewIncidentRepository(pool)), server.Handler)
+	server := httpapi.NewServer(cfg.HTTPAddress, logger, httpapi.Dependencies{
+		Database:  pool,
+		Devices:   device.NewService(database.NewDeviceRepository(pool)),
+		Incidents: incident.NewService(database.NewIncidentRepository(pool)),
+	})
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
 		// Avoid including raw configuration values in startup errors.

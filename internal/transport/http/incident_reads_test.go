@@ -44,7 +44,7 @@ func (s *incidentReadStub) Get(ctx context.Context, id string) (incident.Detail,
 }
 func readHandler(s *incidentReadStub) http.Handler {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return WithIncidents(logger, s, NewHandler(logger, nil))
+	return NewHandler(logger, Dependencies{Incidents: s})
 }
 func TestIncidentListQueryValidation(t *testing.T) {
 	for _, query := range []string{

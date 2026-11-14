@@ -2,6 +2,7 @@
 param(
     [switch]$ChecksOnly,
     [switch]$StartApi,
+    [switch]$Integration,
     [ValidateRange(1024, 65535)][int]$ApiPort = 18080,
     [ValidateRange(1024, 65535)][int]$DatabasePort = 5432
 )
@@ -49,6 +50,7 @@ function Invoke-Migration {
 Push-Location $root
 try {
     if ($StartApi -and $ChecksOnly) { throw 'StartApi and ChecksOnly cannot be combined.' }
+    if ($Integration -and ($StartApi -or $ChecksOnly)) { throw 'Integration cannot be combined with StartApi or ChecksOnly.' }
     $configuration = Read-LocalEnvironment -Root $root -ExamplesOnly:$ChecksOnly
     if (-not $PSBoundParameters.ContainsKey('DatabasePort')) {
         $parsedPort = 0
@@ -76,6 +78,8 @@ try {
     $configuration.POSTGRES_PORT = "$DatabasePort"
     $configuration.GOOSE_DRIVER = 'postgres'
     $configuration.GOOSE_DBSTRING = $configuration.DATABASE_URL
+    # Set through the configuration so the finally block restores the previous value.
+    if ($Integration) { $configuration.OPSAI_TEST_DATABASE_URL = $configuration.DATABASE_URL }
     foreach ($key in $configuration.Keys) {
         $previousEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
         [Environment]::SetEnvironmentVariable($key, $configuration[$key], 'Process')
@@ -121,6 +125,19 @@ try {
         return
     }
 
+    if ($Integration) {
+        Write-Host 'Running repository integration tests against the local database...'
+        # Capture stdout only; redirected native stderr would raise errors in Windows PowerShell.
+        $testOutput = @(& go test -tags=integration ./internal/platform/database `
+            -run 'Test(DeviceRepository|IncidentRepository|IncidentReads)Integration' -count=1 -v)
+        $testExit = $LASTEXITCODE
+        $testOutput | ForEach-Object { Write-Host $_ }
+        if ($testExit -ne 0) { throw "Repository integration tests failed (exit $testExit)." }
+        if ($testOutput | Select-String -SimpleMatch -- '--- SKIP') { throw 'Repository integration tests were skipped; a SKIP is not a PASS.' }
+        if (-not ($testOutput | Select-String -SimpleMatch -- '--- PASS')) { throw 'No repository integration test reported PASS.' }
+        Write-Host 'Repository integration tests passed.'
+    }
+
     $runId = [Guid]::NewGuid().ToString('N')
     $binary = Join-Path $root "bin/opsai-check-$runId.exe"
     Invoke-Checked go @('build', '-o', $binary, './cmd/api')
@@ -147,7 +164,8 @@ try {
     Invoke-Checked postman @('collection', 'run', 'api/postman/OpsAI API',
         '-i', 'System', '--env-var', "base_url=$baseUrl", '--no-report-events',
         '--timeout', '30000', '--timeout-request', '5000', '--ignore-redirects')
-    Write-Host 'Local validation passed: Go checks, database health, migrations, and Postman System assertions.'
+    $integrationNote = if ($Integration) { ' repository integration tests,' } else { '' }
+    Write-Host "Local validation passed: Go checks, database health, migrations,$integrationNote and Postman System assertions."
 } finally {
     try {
         if ($null -ne $apiProcess) {

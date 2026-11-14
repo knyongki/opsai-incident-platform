@@ -17,6 +17,7 @@ describe implemented behavior and operating instructions.
 | 3B - Incident list/detail | Finished | Read APIs implemented and reviewed; unit, integration, Postman, and live pagination checks passed |
 | 4A - Durable worker foundation | Finished | Fake worker, leases, recovery/retries, and validation passed; user accepted; committed as e2e9d1c |
 | 4B - Structured analysis results | Finished | Result contract, migration 00004, atomic worker persistence, detail `analysis` field, and Postman worker-result checks; accepted 2026-11-14 |
+| H1 - HTTP hardening and test automation | Finished | ServeMux routing with the unchanged JSON contract, `X-Request-ID`, access logs, panic recovery, and `check-local.ps1 -Integration`; accepted 2026-11-14 |
 
 The full incident and AI workflows remain on the blueprint. Milestone 4B stores and
 exposes only deterministic fake results (`source: "fake"`); real AI providers, the

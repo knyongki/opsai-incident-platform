@@ -18,7 +18,7 @@ func TestServeAndGracefulShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := httpapi.NewServer(listener.Addr().String(), logger, healthyDatabase{})
+	server := httpapi.NewServer(listener.Addr().String(), logger, httpapi.Dependencies{Database: healthyDatabase{}})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	result := make(chan error, 1)

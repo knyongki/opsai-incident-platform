@@ -34,7 +34,9 @@ Future migrations still need explicit approval. Keep fake execution on a separat
 localhost database ending in _worker_test; incidents remain open. Milestone 4B
 (4B.1-4B.4) is complete: the fake worker validates results and stores them
 atomically with job completion, and incident detail returns them as a labeled
-`analysis` field. No later milestone is authorized yet.
+`analysis` field. H1 (HTTP hardening) is complete: a standard-library ServeMux
+router, request ID/access log/panic recovery middleware, the check-local
+-Integration option, tests, and docs. No later milestone is authorized yet.
 Do not add incident update endpoints, real AI, MQTT,
 authentication, cloud synchronization, CI workflows, or later features without
 an explicit new user request. The blueprint is a roadmap, not blanket authorization.
@@ -59,7 +61,8 @@ not authorization to implement later features.
 - `db/migrations` holds Goose migrations; `db/queries` holds SQL queries and
   `db/sqlc.yaml` configures generation into `internal/platform/database/dbgen`.
   Regenerate sqlc output rather than editing generated files manually.
-- `internal/transport/http` owns handlers, JSON envelopes, and HTTP server settings.
+- `internal/transport/http` owns routing, request middleware (request IDs, access logs, panic
+  recovery), handlers, JSON envelopes, and HTTP server settings.
 - `api/postman/OpsAI API` is the versioned local API collection.
 - `scripts/start-local.ps1` starts PostgreSQL, migrations, and the API.
 - `scripts/start-worker.ps1` starts only the fake worker; -MigrateOnly migrates its separate test database.
@@ -131,6 +134,7 @@ its separate WORKER_DATABASE_URL require explicit configuration.
 | Start the API without tests | `scripts/start-local.ps1` |
 | Full local validation | `scripts/check-local.ps1` |
 | Checks without services or private configuration | `scripts/check-local.ps1 -ChecksOnly` |
+| Full validation plus normal-database integration tests | `scripts/check-local.ps1 -Integration` |
 
 For example:
 
@@ -154,7 +158,8 @@ Use -ChecksOnly for formatting, vet, unit tests, and Compose configuration check
 without starting services. The runner checks formatting but does not run gofmt -w
 or go mod tidy; it does not replace those required steps after Go changes.
 Device and incident repository integration tests are separate: use the explicit integration
-build tag and OPSAI_TEST_DATABASE_URL as documented in the setup guide. A passing System
+build tag and OPSAI_TEST_DATABASE_URL as documented in the setup guide, or -Integration
+for the normal-database subset; the job and worker suite remains a manual command. A passing System
 folder does not establish device API or repository integration coverage.
 Preserve collection/request IDs and review related local collection changes with
 API changes. Cloud publication and synchronization require a separate user request.

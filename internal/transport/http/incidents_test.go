@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
-	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -60,7 +59,7 @@ func TestIncidentHTTP(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := &incidentStub{err: tc.err}
 			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-			h := WithIncidents(logger, stub, http.NotFoundHandler())
+			h := NewHandler(logger, Dependencies{Incidents: stub})
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, httptest.NewRequest("POST", "/api/v1/incidents", strings.NewReader(tc.body)))
 			if w.Code != tc.want || w.Header().Get("Content-Type") != "application/json" {
@@ -94,7 +93,7 @@ func TestIncidentHTTP(t *testing.T) {
 func TestIncidentRouting(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	stub := &incidentStub{}
-	h := WithIncidents(logger, stub, NewHandler(logger, nil))
+	h := NewHandler(logger, Dependencies{Incidents: stub})
 	for _, tc := range []struct {
 		method, path string
 		status       int

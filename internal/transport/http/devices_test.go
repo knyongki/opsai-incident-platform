@@ -80,7 +80,7 @@ func TestDeviceHandlers(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := &deviceRepoStub{err: tt.err}
 			var logs bytes.Buffer
-			h := NewHandler(slog.New(slog.NewJSONHandler(&logs, nil)), nil, device.NewService(repo))
+			h := NewHandler(slog.New(slog.NewJSONHandler(&logs, nil)), Dependencies{Devices: device.NewService(repo)})
 			rr := httptest.NewRecorder()
 			h.ServeHTTP(rr, httptest.NewRequest(tt.method, tt.path, strings.NewReader(tt.body)))
 			if rr.Code != tt.status {

@@ -153,7 +153,7 @@ pass `-DatabasePort`; DATABASE_URL must match. The runner installs no tools, use
 only the local collection, and never publishes edits; cloud synchronization needs
 an explicit request, and existing collection/request IDs must be preserved.
 
-Expect two requests, seven assertions, zero failures, and
+Expect two requests, nine assertions, zero failures, and
 `Local validation passed`. Local Postman CLI may print cloud-login messages;
 the previously verified System run succeeded without login. Check the assertion
 summary and exit code. No automatic cloud synchronization or GitHub Actions run.
@@ -178,6 +178,19 @@ docker compose --env-file .env.example config --quiet
 
 Unit tests need no database. A passing System folder or unit test run does not
 prove PostgreSQL behavior; use the repository integration tests below.
+
+To include the normal-database repository integration tests in the full run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-local.ps1 -Integration
+```
+
+After migrations it sets `OPSAI_TEST_DATABASE_URL` from the validated localhost
+`DATABASE_URL` for this process only, runs the device, incident creation, and
+incident read integration tests, and fails on any SKIP. It changes data exactly
+as the manual command below does. The job and worker suite stays manual because it
+needs the isolated worker database with no workers running. `-Integration`
+cannot be combined with `-ChecksOnly` or `-StartApi`.
 
 ### Repository integration tests
 

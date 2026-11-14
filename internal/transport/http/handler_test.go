@@ -15,7 +15,7 @@ import (
 )
 
 func TestHandler(t *testing.T) {
-	handler := NewHandler(slog.New(slog.NewJSONHandler(io.Discard, nil)), pingFunc(func(context.Context) error { return nil }))
+	handler := NewHandler(slog.New(slog.NewJSONHandler(io.Discard, nil)), Dependencies{Database: pingFunc(func(context.Context) error { return nil })})
 	for _, tt := range []struct {
 		name, method, path, body string
 		status                   int
@@ -79,7 +79,7 @@ func TestReadiness(t *testing.T) {
 				return tt.pingError
 			})
 			rr := httptest.NewRecorder()
-			NewHandler(logger, database).ServeHTTP(rr, httptest.NewRequest(tt.method, tt.path, nil))
+			NewHandler(logger, Dependencies{Database: database}).ServeHTTP(rr, httptest.NewRequest(tt.method, tt.path, nil))
 			if rr.Code != tt.status || calls != tt.calls {
 				t.Fatalf("status = %d, calls = %d; want %d, %d", rr.Code, calls, tt.status, tt.calls)
 			}
@@ -109,7 +109,7 @@ func TestReadinessCancellation(t *testing.T) {
 		return ctx.Err()
 	})
 	rr := httptest.NewRecorder()
-	NewHandler(slog.New(slog.NewJSONHandler(io.Discard, nil)), checker).ServeHTTP(rr,
+	NewHandler(slog.New(slog.NewJSONHandler(io.Discard, nil)), Dependencies{Database: checker}).ServeHTTP(rr,
 		httptest.NewRequest("GET", "/ready", nil).WithContext(ctx))
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", rr.Code)
@@ -118,7 +118,7 @@ func TestReadinessCancellation(t *testing.T) {
 
 func TestReadinessMissingChecker(t *testing.T) {
 	rr := httptest.NewRecorder()
-	NewHandler(slog.New(slog.NewJSONHandler(io.Discard, nil)), nil).ServeHTTP(rr,
+	NewHandler(slog.New(slog.NewJSONHandler(io.Discard, nil)), Dependencies{}).ServeHTTP(rr,
 		httptest.NewRequest("GET", "/ready", nil))
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", rr.Code)
