@@ -1,5 +1,8 @@
 # OpsAI contributor instructions
 
+These rules apply to every contributor and AI agent. This file is the single
+source of truth: `CLAUDE.md` only imports it for Claude Code, so edit rules here.
+
 ## Scope
 
 Read [the project blueprint](docs/OpsAI-Project-Blueprint.md) completely before
