@@ -142,8 +142,12 @@ func TestReadServiceErrorsAndDetail(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	detail, err := svc.Get(ctx, strings.ToUpper(validInput().DeviceID))
-	if err != nil || detail.Description != "Complete description" || detail.RawLogs == nil || repo.id != validInput().DeviceID || repo.ctx != ctx {
+	if err != nil || detail.Description != "Complete description" || detail.RawLogs == nil || detail.Analysis != nil || repo.id != validInput().DeviceID || repo.ctx != ctx {
 		t.Fatal("detail normalization/context")
+	}
+	repo.detail.Analysis = &Analysis{ID: validInput().DeviceID, SchemaVersion: 1, Source: "fake"}
+	if detail, err = svc.Get(ctx, validInput().DeviceID); err != nil || detail.Analysis != repo.detail.Analysis {
+		t.Fatal("stored analysis not passed through")
 	}
 	calls := repo.calls
 	if _, err := svc.Get(ctx, "bad"); !errors.Is(err, ErrInvalid) || repo.calls != calls {

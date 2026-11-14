@@ -3,11 +3,13 @@
 OpsAI is an AI-assisted incident-analysis platform for industrial equipment,
 written in Go. Implemented scope: **Milestone 1 (Go API Foundation)**,
 **Milestone 2A (PostgreSQL Foundation)**, **Milestone 2B (Device Management API)**,
-**Milestone 3A (Incident Creation and Durable Job Enqueueing)**, and
-**Milestone 3B (Incident List and Detail APIs)**, and
-**Milestone 4A (Durable Worker Foundation)**. The worker runs only a
+**Milestone 3A (Incident Creation and Durable Job Enqueueing)**,
+**Milestone 3B (Incident List and Detail APIs)**,
+**Milestone 4A (Durable Worker Foundation)**, and
+**Milestone 4B (Structured Analysis Results, fake analyzer only)**. The worker runs only a
 fake analyzer against a separate synthetic test database. The 4B.3 worker stores
-validated synthetic results atomically with job completion. Real AI,
+validated synthetic results atomically with job completion, and since 4B.4 incident
+detail returns them as a labeled `analysis` field. Real AI,
 incident update endpoints, MQTT, and authentication remain future work.
 Milestone 4B.1 defines the [analysis result contract](#analysis-result-contract-milestone-4b1),
 used by the fake worker since 4B.3. See the
@@ -370,9 +372,35 @@ List items contain only `id`, `device_id`, `title`, `alarm_code`, `severity`,
 `status`, `analysis_status`, `occurred_at`, `created_at`, and `updated_at`.
 They omit description and raw logs. `items` is always an array.
 
-Detail adds `description`, `raw_logs`, and `resolved_at`. Optional alarm_code,
+Detail adds `description`, `raw_logs`, `resolved_at`, and `analysis`. Optional alarm_code,
 occurred_at, and resolved_at serialize as JSON null when absent; raw_logs is an
 array, including `[]` when empty. Timestamps are returned in UTC.
+
+### Stored analysis in detail (Milestone 4B.4)
+
+`analysis` is `null` until a validated result is stored: for queued, running, and
+failed jobs, and for legacy completed jobs from before 4B.3. Otherwise it is:
+
+```json
+{
+  "id": "UUID",
+  "schema_version": 1,
+  "source": "fake",
+  "created_at": "UTC timestamp",
+  "result": { "summary": "...", "primary_suspected_cause": "...",
+              "contributing_factors": [], "observed_conditions": ["..."],
+              "recommended_actions": [], "safety_notes": ["..."],
+              "confidence": 0, "evidence": [{ "source_id": "incident UUID", "claim": "..." }] }
+}
+```
+
+`source: "fake"` marks deterministic test output: no diagnosis was performed and
+confidence is 0. The repository revalidates stored JSON with the strict
+[version-1 decoder](#analysis-result-contract-milestone-4b1) before returning it.
+An unsupported version or source, malformed result, evidence for another incident,
+or a result attached to a non-completed job returns sanitized 500
+`INTERNAL_ERROR`; stored JSON is never returned unvalidated. List and POST
+responses are unchanged and never include `analysis`.
 
 The existing job row supplies analysis_status: `pending` maps to `queued`;
 `running`, `completed`, and `failed` retain their names. No job IDs, attempt counts,
@@ -381,7 +409,9 @@ as a storage invariant failure (sanitized 500 `INTERNAL_ERROR`), rather than hid
 the incident. A nonexistent incident returns 404 `NOT_FOUND`.
 
 The sqlc queries `ListIncidents` and `GetIncident` read the existing tables with a
-left join to analysis_jobs. No schema migration or dependency was added. Existing
+left join to analysis_jobs; `GetIncident` also left-joins incident_analyses, so the
+incident, job status, and analysis come from one consistent statement. No schema
+migration or dependency was added for reads. Existing
 indexes are sufficient for correctness; large datasets may need a measured index
 improvement later. Performance/load testing is not part of this milestone.
 
@@ -403,7 +433,10 @@ if ($firstPage.data.page.has_more) {
 
 Alternatively run the local **Incidents - Manual** Postman folder: its setup saves
 incident_id, then the read requests check list, combined filters, complete detail,
-invalid UUID, and a missing incident. The 3B requests were synchronized to the cloud
+invalid UUID, and a missing incident; detail requires `analysis` to be null unless the
+job is completed. **Incidents - Worker Result** checks a stored fake result; run it only
+with the [isolated worker setup](docs/Local-Automation-Setup.md#isolated-fake-worker-milestone-4a).
+The 3B requests were synchronized to the cloud
 collection on explicit request and fetched back for verification. Automatic
 validation continues to run only **System**; later edits are not automatically synced.
 
@@ -421,7 +454,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command {
 }
 ```
 
-PostgreSQL must be running with all current migrations applied. Require all three
+PostgreSQL must be running with all current migrations applied, including 00004,
+which the stored-analysis detail subtest needs. Require all three
 tests to report PASS, not SKIP. Normal `go test ./...` remains database-independent.
 
 ## Fake worker (Milestone 4A)
@@ -485,7 +519,8 @@ retry within the configured cap; permanent and invalid output stop immediately.
 A storage failure while loading the claimed incident releases the job for retry
 with `ANALYSIS_INPUT_UNAVAILABLE` instead of holding it until lease expiry; a
 result rejected inside the completion transaction is recorded as
-`ANALYSIS_INVALID_OUTPUT`. Until Milestone 4B.4, the detail API does not return stored results. Safe error
+`ANALYSIS_INVALID_OUTPUT`. Incident detail returns the stored result as `analysis`
+(see [Stored analysis in detail](#stored-analysis-in-detail-milestone-4b4)). Safe error
 codes are stored internally; result bodies and raw errors are not logged.
 
 Stop all workers before repository tests. Use an otherwise empty queue in a
@@ -515,8 +550,8 @@ use isolated schemas rolled back afterward. Normal `go test ./...` needs no data
 result. `Validate(result Result, incidentID string) error` checks typed values.
 Both return the sanitized `ErrInvalid` on rejection, without including input.
 Results are mutable: later persistence code must validate them again before storing.
-The worker stores validated results atomically since Milestone 4B.3; HTTP contracts
-remain unchanged until 4B.4.
+The worker stores validated results atomically since Milestone 4B.3; since 4B.4
+incident detail decodes stored results again with `Decode` before returning them.
 
 All fields below are required, non-null, and use exactly the shown names.
 Empty arrays are allowed only where the minimum is zero; nil slices are invalid.
@@ -561,7 +596,7 @@ owned, unexpired job in one transaction. A failed insert, completion, or commit
 leaves no partially stored state; a lost commit acknowledgement can still mean the
 transaction committed, so callers must use existing job recovery semantics.
 Since 4B.3 the worker completes successful jobs only through this operation.
-No API response exposes stored results yet.
+Since 4B.4 only incident detail exposes stored results.
 
 ## Local validation
 

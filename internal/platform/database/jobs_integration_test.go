@@ -80,6 +80,20 @@ func jobExec(t *testing.T, pool *pgxpool.Pool, ctx context.Context, sql string, 
 		t.Fatal("job fixture mutation failed")
 	}
 }
+
+// workerResultDetail reads a job's incident through the public detail repository.
+func workerResultDetail(t *testing.T, pool *pgxpool.Pool, ctx context.Context, jobID string) incident.Detail {
+	t.Helper()
+	var incidentID string
+	if err := pool.QueryRow(ctx, `SELECT incident_id::text FROM analysis_jobs WHERE id=$1`, jobID).Scan(&incidentID); err != nil {
+		t.Fatal("job incident lookup failed")
+	}
+	detail, err := NewIncidentRepository(pool).Get(ctx, incidentID)
+	if err != nil {
+		t.Fatal("incident detail read failed")
+	}
+	return detail
+}
 func assertJob(t *testing.T, pool queryRower, ctx context.Context, id, status string, attempt int) {
 	t.Helper()
 	var got string
@@ -361,6 +375,12 @@ func TestWorkerAnalysisIntegration(t *testing.T) {
 		if err := pool.QueryRow(ctx, `SELECT i.status FROM incidents i JOIN analysis_jobs j ON j.incident_id=i.id WHERE j.id=$1`, ids[0]).Scan(&status); err != nil || status != "open" {
 			t.Fatal("worker changed incident lifecycle")
 		}
+		detail := workerResultDetail(t, pool, ctx, ids[0])
+		a := detail.Analysis
+		if detail.AnalysisStatus != "completed" || a == nil || a.Source != "fake" || a.SchemaVersion != 1 || a.CreatedAt.IsZero() ||
+			a.Result.Confidence != 0 || len(a.Result.Evidence) != 1 || a.Result.Evidence[0].SourceID != detail.ID {
+			t.Fatal("worker-stored result did not round-trip through incident detail")
+		}
 	})
 	t.Run("invalid output fails without storing raw result", func(t *testing.T) {
 		ids := jobFixtures(t, pool, ctx, 1)
@@ -377,6 +397,9 @@ func TestWorkerAnalysisIntegration(t *testing.T) {
 		}
 		if err := pool.QueryRow(ctx, `SELECT count(a.id) FROM incident_analyses a JOIN analysis_jobs j ON j.incident_id=a.incident_id WHERE j.id=$1`, ids[0]).Scan(&count); err != nil || count != 0 {
 			t.Fatal("invalid result was persisted")
+		}
+		if detail := workerResultDetail(t, pool, ctx, ids[0]); detail.AnalysisStatus != "failed" || detail.Analysis != nil {
+			t.Fatal("failed job must read back with null analysis")
 		}
 	})
 	t.Run("transient failure can retry and persist one result", func(t *testing.T) {

@@ -1,0 +1,3 @@
+$kind: collection
+description: Run in order only while the fake worker in success mode and an API on its separate worker test database are running (see docs/Local-Automation-Setup.md). Creates its own device and incident, then polls detail at most 20 times until the stored fake analysis appears. Records persist. Excluded from check-local.ps1.
+order: 5000

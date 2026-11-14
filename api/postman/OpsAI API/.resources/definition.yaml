@@ -1,7 +1,10 @@
 $kind: collection
-description: Local OpsAI tests. Device CRUD uses device_id; Incidents - Manual creates its own persistent device using incident_device_id. Automation runs only System.
+description: Local OpsAI tests. Device CRUD uses device_id; Incidents - Manual creates its own persistent device using incident_device_id. Incidents - Worker Result needs the fake worker and uses its own worker_ variables. Automation runs only System.
 variables:
   base_url: http://127.0.0.1:8080
   device_id: ""
   incident_device_id: ""
   incident_id: ""
+  worker_device_id: ""
+  worker_incident_id: ""
+  worker_poll_attempt: ""

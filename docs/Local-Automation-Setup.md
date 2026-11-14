@@ -263,11 +263,14 @@ process and must not consume the normal development queue.
    }
    ```
 
-5. Set Postman base_url to `http://127.0.0.1:18082` and run Incidents - Manual.
-   POST still returns queued. The worker stores a validated synthetic result
-   atomically with job completion; incident status stays open. Until Milestone
-   4B.4, GET detail does not expose stored results.
-   Restore Postman's base_url to your usual API afterward.
+5. Set Postman base_url to `http://127.0.0.1:18082`. Run **Incidents - Worker
+   Result** with the folder runner: it creates its own device and incident, then
+   polls detail at most 20 times (about 500 ms apart) until the job is completed
+   and `analysis` holds the stored result with `source: "fake"`. POST still returns
+   queued and incident status stays open. Polling repeats only in the runner; a
+   single Send checks once. With `WORKER_FAKE_OUTCOME=invalid-output` that folder
+   fails by design; instead run Incidents - Manual and expect `analysis_status:
+   failed` with `analysis: null`. Restore Postman's base_url to your usual API afterward.
 
 For a visible transition, set WORKER_FAKE_DELAY to 5s before starting the worker.
 Use transient-once to demonstrate retry then success, permanent for terminal

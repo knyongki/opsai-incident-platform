@@ -10,6 +10,8 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"github.com/knyongki/opsai-incident-platform/internal/analysis"
 )
 
 // Summary deliberately excludes description and raw logs.
@@ -30,6 +32,17 @@ type Detail struct {
 	Description string     `json:"description"`
 	RawLogs     []string   `json:"raw_logs"`
 	ResolvedAt  *time.Time `json:"resolved_at"`
+	// Analysis is nil until a validated result is stored, including legacy completed jobs.
+	Analysis *Analysis `json:"analysis"`
+}
+
+// Analysis is a stored, revalidated result; ID, version, source, and time are trusted metadata.
+type Analysis struct {
+	ID            string          `json:"id"`
+	SchemaVersion int             `json:"schema_version"`
+	Source        string          `json:"source"`
+	CreatedAt     time.Time       `json:"created_at"`
+	Result        analysis.Result `json:"result"`
 }
 type Filters struct {
 	DeviceID  string  `json:"device_id"`

@@ -29,10 +29,10 @@ the separate fake worker, claim-token/lease migration 00003, bounded retries and
 recovery, tests, local configuration, and documentation. Implementation and this
 migration were approved together by the user's request to execute the plan.
 Future migrations still need explicit approval. Keep fake execution on a separate
-localhost database ending in _worker_test; incidents remain open. Milestones 4B.1,
-4B.2, and 4B.3 are complete: the fake worker validates results and stores them
-atomically with job completion. Milestone 4B.4 (detail API field and Postman
-assertions) remains planned and needs an explicit request.
+localhost database ending in _worker_test; incidents remain open. Milestone 4B
+(4B.1-4B.4) is complete: the fake worker validates results and stores them
+atomically with job completion, and incident detail returns them as a labeled
+`analysis` field. No later milestone is authorized yet.
 Do not add incident update endpoints, real AI, MQTT,
 authentication, cloud synchronization, CI workflows, or later features without
 an explicit new user request. The blueprint is a roadmap, not blanket authorization.

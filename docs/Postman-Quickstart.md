@@ -36,7 +36,7 @@ collection's dedicated `incident_device_id`.
 | 4 | Incidents - Manual / Create Incident | 202; `status = open`, `analysis_status = queued` |
 | 5 | Incidents - Manual / List Incidents | 200; summary items and cursor page |
 | 6 | Incidents - Manual / List Incidents With Filters | 200; includes the created incident |
-| 7 | Incidents - Manual / Get Created Incident | 200; full description/logs and job status |
+| 7 | Incidents - Manual / Get Created Incident | 200; full description/logs, job status, and `analysis` (null without a worker) |
 | 8 | Incidents - Manual / Get Incident - Invalid UUID | 400; validation error |
 | 9 | Incidents - Manual / Get Incident - Missing | 404; missing incident |
 
@@ -54,7 +54,11 @@ Incident requests create persistent records. Repeating POST creates another
 incident and job. `queued` means the job is stored. Normal startup runs only the
 API. The optional [4A fake worker](../README.md#fake-worker-milestone-4a) runs
 against a separate test database and creates no AI findings. Detail assertions
-allow queued/running/completed/failed while incident status remains open.
+allow queued/running/completed/failed while incident status remains open, and
+require `analysis` to be null unless the job is completed. To see a stored fake
+result, run **Incidents - Worker Result** against the
+[isolated worker setup](Local-Automation-Setup.md#isolated-fake-worker-milestone-4a);
+it fails without a running worker.
 HTTP assertions do not replace the repository transaction integration tests.
 
 ## 4. Stop

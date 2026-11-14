@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/knyongki/opsai-incident-platform/internal/analysis"
 	"github.com/knyongki/opsai-incident-platform/internal/incident"
 )
 
@@ -130,13 +131,60 @@ func TestIncidentDetailHTTP(t *testing.T) {
 		t.Fatal("detail JSON")
 	}
 	d := envelope.Data
-	if len(d) != 13 || d["description"] != "Full description" || d["resolved_at"] != nil || d["alarm_code"] != nil || d["occurred_at"] != nil || len(d["raw_logs"].([]any)) != 1 {
+	if len(d) != 14 || d["description"] != "Full description" || d["resolved_at"] != nil || d["alarm_code"] != nil || d["occurred_at"] != nil || len(d["raw_logs"].([]any)) != 1 {
 		t.Fatal("detail shape")
 	}
-	for _, key := range []string{"job_id", "attempt_count", "locked_at", "last_error"} {
+	if a, ok := d["analysis"]; !ok || a != nil {
+		t.Fatal("detail without a stored result must include analysis: null")
+	}
+	for _, key := range []string{"job_id", "attempt_count", "locked_at", "last_error", "claim_token"} {
 		if _, ok := d[key]; ok {
 			t.Fatal("internal job field exposed")
 		}
+	}
+}
+func TestIncidentDetailHTTPStoredAnalysis(t *testing.T) {
+	id := "12345678-1234-4234-8234-123456789abc"
+	analysisID := "87654321-4321-4321-8321-cba987654321"
+	created := time.Date(2026, 11, 14, 7, 30, 0, 0, time.UTC)
+	s := &incidentReadStub{detail: incident.Detail{
+		Summary: incident.Summary{ID: id, AnalysisStatus: "completed"}, RawLogs: []string{},
+		Analysis: &incident.Analysis{ID: analysisID, SchemaVersion: 1, Source: "fake", CreatedAt: created, Result: analysis.Result{
+			Summary: "Synthetic summary", PrimarySuspectedCause: "No diagnosis was performed",
+			ContributingFactors: []string{}, ObservedConditions: []string{"Synthetic input"},
+			RecommendedActions: []analysis.Action{}, SafetyNotes: []string{"Test output only"},
+			Confidence: 0, Evidence: []analysis.Evidence{{SourceID: id, Claim: "Synthetic incident record"}},
+		}},
+	}}
+	w := httptest.NewRecorder()
+	readHandler(s).ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/incidents/"+id, nil))
+	var envelope struct {
+		Data struct {
+			AnalysisStatus string `json:"analysis_status"`
+			Analysis       *struct {
+				ID            string                     `json:"id"`
+				SchemaVersion int                        `json:"schema_version"`
+				Source        string                     `json:"source"`
+				CreatedAt     string                     `json:"created_at"`
+				Result        map[string]json.RawMessage `json:"result"`
+			} `json:"analysis"`
+		} `json:"data"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &envelope) != nil || envelope.Data.Analysis == nil {
+		t.Fatalf("stored analysis not served: %d %s", w.Code, w.Body.String())
+	}
+	a := envelope.Data.Analysis
+	if envelope.Data.AnalysisStatus != "completed" || a.ID != analysisID || a.SchemaVersion != 1 || a.Source != "fake" || a.CreatedAt != "2026-11-14T07:30:00Z" {
+		t.Fatalf("analysis metadata: %+v", a)
+	}
+	for _, key := range []string{"summary", "primary_suspected_cause", "contributing_factors", "observed_conditions",
+		"recommended_actions", "safety_notes", "confidence", "evidence"} {
+		if _, ok := a.Result[key]; !ok {
+			t.Fatalf("result field %s missing", key)
+		}
+	}
+	if len(a.Result) != 8 || string(a.Result["contributing_factors"]) != "[]" || string(a.Result["confidence"]) != "0" {
+		t.Fatal("result contract")
 	}
 }
 func TestIncidentReadErrorsAndRouting(t *testing.T) {

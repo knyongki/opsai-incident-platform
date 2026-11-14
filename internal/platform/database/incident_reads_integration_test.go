@@ -193,6 +193,46 @@ func TestIncidentReadsIntegration(t *testing.T) {
 			t.Fatal("nonexistent incident mapping")
 		}
 	})
+	t.Run("stored analysis in detail", func(t *testing.T) {
+		insert := func(incidentID string, result []byte) string {
+			id := integrationID(t)
+			if _, err := tx.Exec(ctx, `INSERT INTO incident_analyses (id, incident_id, schema_version, source, result)
+                VALUES ($1, $2, 1, 'fake', $3::jsonb)`, id, incidentID, string(result)); err != nil {
+				t.Fatal("analysis fixture failed")
+			}
+			return id
+		}
+		legacy, err := svc.Get(ctx, ids[2])
+		if err != nil || legacy.AnalysisStatus != "completed" || legacy.Analysis != nil {
+			t.Fatal("legacy completed job without a result must return null analysis")
+		}
+		queued, err := svc.Get(ctx, ids[0])
+		if err != nil || queued.Analysis != nil {
+			t.Fatal("queued job must return null analysis")
+		}
+
+		analysisID := insert(ids[2], storedAnalysisJSON(t, ids[2]))
+		stored, err := svc.Get(ctx, ids[2])
+		if err != nil || stored.Analysis == nil || stored.Analysis.ID != analysisID || stored.Analysis.SchemaVersion != 1 ||
+			stored.Analysis.Source != "fake" || stored.Analysis.CreatedAt.Location() != time.UTC || stored.Analysis.CreatedAt.IsZero() ||
+			stored.Analysis.Result.Summary != "Synthetic summary" || len(stored.Analysis.Result.Evidence) != 1 ||
+			stored.Analysis.Result.Evidence[0].SourceID != ids[2] || stored.Analysis.Result.ContributingFactors == nil {
+			t.Fatal("stored analysis did not round-trip through detail")
+		}
+		list, err := svc.List(ctx, incident.ListOptions{Filters: incident.Filters{DeviceID: d.ID}})
+		if err != nil || len(list.Items) != 5 {
+			t.Fatal("list changed by stored analysis")
+		}
+
+		insert(ids[4], []byte(`{"summary": "sensitive stored text"}`))
+		if _, err := svc.Get(ctx, ids[4]); !errors.Is(err, incident.ErrRepository) {
+			t.Fatal("corrupt stored analysis returned")
+		}
+		insert(ids[3], storedAnalysisJSON(t, ids[3]))
+		if _, err := svc.Get(ctx, ids[3]); !errors.Is(err, incident.ErrRepository) {
+			t.Fatal("analysis on a failed job accepted")
+		}
+	})
 	t.Run("missing job is an invariant error", func(t *testing.T) {
 		// Fixture-only mutation, reverted with the surrounding transaction.
 		if _, err := tx.Exec(ctx, "DELETE FROM analysis_jobs WHERE incident_id=$1", otherIncident.ID); err != nil {

@@ -1,0 +1,42 @@
+$kind: http-request
+description: Repeats itself in the collection runner while the job is queued or running, at most 20 attempts about 500 ms apart, then requires a completed job with a labeled fake analysis.
+url: '{{base_url}}/api/v1/incidents/{{worker_incident_id}}'
+method: GET
+scripts:
+  - type: beforeRequest
+    code: |-
+      const id = pm.collectionVariables.get('worker_incident_id');
+      if (!id) throw new Error('Run Create Worker Result Incident successfully first.');
+      pm.variables.set('worker_incident_id', id);
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      const maxAttempts = 20;
+      const attempt = Number(pm.collectionVariables.get('worker_poll_attempt') || '0') + 1;
+      pm.test('Status is 200', () => pm.response.to.have.status(200));
+      const item = pm.response.code === 200 ? pm.response.json().data : {};
+      const waiting = item.analysis_status === 'queued' || item.analysis_status === 'running';
+      if (waiting && attempt < maxAttempts) {
+        pm.collectionVariables.set('worker_poll_attempt', String(attempt));
+        // The runner waits for pending timers, which bounds the poll interval.
+        setTimeout(() => {}, 500);
+        pm.execution.setNextRequest(pm.info.requestName);
+      } else {
+        pm.collectionVariables.unset('worker_poll_attempt');
+        pm.test('Worker completed the job within the poll limit', () => pm.expect(item.analysis_status).to.eql('completed'));
+        pm.test('Stored analysis is labeled fake test output', () => {
+          const a = item.analysis;
+          pm.expect(a).to.be.an('object');
+          pm.expect(a).to.have.all.keys('id', 'schema_version', 'source', 'created_at', 'result');
+          pm.expect(a.id).to.match(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+          pm.expect(a.source).to.eql('fake');
+          pm.expect(a.schema_version).to.eql(1);
+          pm.expect(a.result).to.have.all.keys('summary', 'primary_suspected_cause', 'contributing_factors', 'observed_conditions', 'recommended_actions', 'safety_notes', 'confidence', 'evidence');
+          pm.expect(a.result.confidence).to.eql(0);
+          pm.expect(a.result.evidence).to.have.lengthOf(1);
+          pm.expect(a.result.evidence[0].source_id).to.eql(item.id);
+        });
+        pm.test('Incident stays open', () => pm.expect(item.status).to.eql('open'));
+      }
+    language: text/javascript
+order: 3000

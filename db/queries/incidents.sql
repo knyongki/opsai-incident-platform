@@ -20,7 +20,12 @@ ORDER BY i.created_at DESC, i.id DESC
 LIMIT sqlc.arg(row_limit)::int;
 
 -- name: GetIncident :one
-SELECT i.*, j.status AS job_status
+-- One statement keeps job status and the optional stored analysis consistent.
+SELECT i.*, j.status AS job_status,
+       a.id AS analysis_id, a.schema_version AS analysis_schema_version,
+       a.source AS analysis_source, a.result AS analysis_result,
+       a.created_at AS analysis_created_at
 FROM incidents i
 LEFT JOIN analysis_jobs j ON j.incident_id = i.id
+LEFT JOIN incident_analyses a ON a.incident_id = i.id
 WHERE i.id = $1;

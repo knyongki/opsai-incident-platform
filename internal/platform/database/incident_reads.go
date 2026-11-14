@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/knyongki/opsai-incident-platform/internal/analysis"
 	"github.com/knyongki/opsai-incident-platform/internal/incident"
 	"github.com/knyongki/opsai-incident-platform/internal/platform/database/dbgen"
 )
@@ -111,9 +112,35 @@ func (r *IncidentRepository) Get(ctx context.Context, id string) (incident.Detai
 	if err != nil {
 		return incident.Detail{}, err
 	}
+	stored, err := incidentAnalysis(row, summary.AnalysisStatus)
+	if err != nil {
+		return incident.Detail{}, err
+	}
 	logs := row.RawLogs
 	if logs == nil {
 		logs = []string{}
 	}
-	return incident.Detail{Summary: summary, Description: row.Description, RawLogs: logs, ResolvedAt: timePointer(row.ResolvedAt)}, nil
+	return incident.Detail{Summary: summary, Description: row.Description, RawLogs: logs,
+		ResolvedAt: timePointer(row.ResolvedAt), Analysis: stored}, nil
+}
+
+// incidentAnalysis revalidates stored output instead of trusting the database, so
+// corrupt or unsupported rows become a sanitized repository error, never raw JSON.
+func incidentAnalysis(row dbgen.GetIncidentRow, analysisStatus string) (*incident.Analysis, error) {
+	if !row.AnalysisID.Valid {
+		return nil, nil
+	}
+	if analysisStatus != "completed" || !row.AnalysisSchemaVersion.Valid ||
+		row.AnalysisSchemaVersion.Int32 != analysis.SchemaVersion ||
+		!row.AnalysisSource.Valid || row.AnalysisSource.String != "fake" || !row.AnalysisCreatedAt.Valid {
+		return nil, incident.ErrRepository
+	}
+	result, err := analysis.Decode(row.AnalysisResult, uuidString(row.ID))
+	if err != nil {
+		return nil, incident.ErrRepository
+	}
+	return &incident.Analysis{
+		ID: uuidString(row.AnalysisID), SchemaVersion: analysis.SchemaVersion, Source: row.AnalysisSource.String,
+		CreatedAt: row.AnalysisCreatedAt.Time.UTC(), Result: result,
+	}, nil
 }

@@ -1,0 +1,41 @@
+$kind: http-request
+url: '{{base_url}}/api/v1/incidents'
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: json
+  content: |-
+    {
+      "device_id": "{{worker_device_id}}",
+      "title": "Demo worker result",
+      "description": "Synthetic incident for fake worker result verification.",
+      "severity": "medium",
+      "raw_logs": [
+        "Synthetic worker log"
+      ]
+    }
+scripts:
+  - type: beforeRequest
+    code: |-
+      pm.collectionVariables.unset('worker_incident_id');
+      pm.collectionVariables.set('worker_poll_attempt', '0');
+      const id = pm.collectionVariables.get('worker_device_id');
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id || '')) {
+        throw new Error('Run Create Worker Result Device successfully first.');
+      }
+      pm.variables.set('worker_device_id', id);
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('Status is 202', () => pm.response.to.have.status(202));
+      pm.test('Incident is durably queued', () => {
+        const data = pm.response.json().data;
+        pm.expect(data).to.have.all.keys('id', 'status', 'analysis_status');
+        pm.expect(data.analysis_status).to.eql('queued');
+      });
+      if (pm.response.code === 202 && pm.response.json().data.id) {
+        pm.collectionVariables.set('worker_incident_id', pm.response.json().data.id);
+      }
+    language: text/javascript
+order: 2000

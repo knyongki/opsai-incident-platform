@@ -85,28 +85,38 @@ func (q *Queries) CreateIncident(ctx context.Context, arg CreateIncidentParams) 
 }
 
 const getIncident = `-- name: GetIncident :one
-SELECT i.id, i.device_id, i.title, i.description, i.alarm_code, i.severity, i.status, i.raw_logs, i.occurred_at, i.created_at, i.updated_at, i.resolved_at, j.status AS job_status
+SELECT i.id, i.device_id, i.title, i.description, i.alarm_code, i.severity, i.status, i.raw_logs, i.occurred_at, i.created_at, i.updated_at, i.resolved_at, j.status AS job_status,
+       a.id AS analysis_id, a.schema_version AS analysis_schema_version,
+       a.source AS analysis_source, a.result AS analysis_result,
+       a.created_at AS analysis_created_at
 FROM incidents i
 LEFT JOIN analysis_jobs j ON j.incident_id = i.id
+LEFT JOIN incident_analyses a ON a.incident_id = i.id
 WHERE i.id = $1
 `
 
 type GetIncidentRow struct {
-	ID          pgtype.UUID
-	DeviceID    pgtype.UUID
-	Title       string
-	Description string
-	AlarmCode   pgtype.Text
-	Severity    string
-	Status      string
-	RawLogs     []string
-	OccurredAt  pgtype.Timestamptz
-	CreatedAt   pgtype.Timestamptz
-	UpdatedAt   pgtype.Timestamptz
-	ResolvedAt  pgtype.Timestamptz
-	JobStatus   pgtype.Text
+	ID                    pgtype.UUID
+	DeviceID              pgtype.UUID
+	Title                 string
+	Description           string
+	AlarmCode             pgtype.Text
+	Severity              string
+	Status                string
+	RawLogs               []string
+	OccurredAt            pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+	ResolvedAt            pgtype.Timestamptz
+	JobStatus             pgtype.Text
+	AnalysisID            pgtype.UUID
+	AnalysisSchemaVersion pgtype.Int4
+	AnalysisSource        pgtype.Text
+	AnalysisResult        []byte
+	AnalysisCreatedAt     pgtype.Timestamptz
 }
 
+// One statement keeps job status and the optional stored analysis consistent.
 func (q *Queries) GetIncident(ctx context.Context, id pgtype.UUID) (GetIncidentRow, error) {
 	row := q.db.QueryRow(ctx, getIncident, id)
 	var i GetIncidentRow
@@ -124,6 +134,11 @@ func (q *Queries) GetIncident(ctx context.Context, id pgtype.UUID) (GetIncidentR
 		&i.UpdatedAt,
 		&i.ResolvedAt,
 		&i.JobStatus,
+		&i.AnalysisID,
+		&i.AnalysisSchemaVersion,
+		&i.AnalysisSource,
+		&i.AnalysisResult,
+		&i.AnalysisCreatedAt,
 	)
 	return i, err
 }

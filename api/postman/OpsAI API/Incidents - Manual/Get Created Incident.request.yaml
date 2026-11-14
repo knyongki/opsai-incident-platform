@@ -16,7 +16,7 @@ scripts:
         const body = pm.response.json();
         pm.expect(body).to.have.all.keys('data');
         const item = body.data;
-        pm.expect(item).to.have.all.keys('id', 'device_id', 'title', 'description', 'alarm_code', 'severity', 'status', 'analysis_status', 'raw_logs', 'occurred_at', 'created_at', 'updated_at', 'resolved_at');
+        pm.expect(item).to.have.all.keys('id', 'device_id', 'title', 'description', 'alarm_code', 'severity', 'status', 'analysis_status', 'raw_logs', 'occurred_at', 'created_at', 'updated_at', 'resolved_at', 'analysis');
         pm.expect(item.id).to.eql(pm.collectionVariables.get('incident_id'));
         pm.expect(item.device_id).to.eql(pm.collectionVariables.get('incident_device_id'));
         pm.expect(item.description).to.eql('Synthetic incident for local verification.');
@@ -24,6 +24,17 @@ scripts:
         pm.expect(item.analysis_status).to.be.oneOf(['queued', 'running', 'completed', 'failed']);
         pm.expect(item.status).to.eql('open');
         pm.expect(item.resolved_at).to.eql(null);
+      });
+      // Without a worker the job stays queued; a legacy completed job may also have no result.
+      pm.test('Analysis is null unless completed, and labeled fake when present', () => {
+        const item = pm.response.json().data;
+        if (item.analysis_status !== 'completed') pm.expect(item.analysis).to.eql(null);
+        if (item.analysis !== null) {
+          pm.expect(item.analysis).to.have.all.keys('id', 'schema_version', 'source', 'created_at', 'result');
+          pm.expect(item.analysis.source).to.eql('fake');
+          pm.expect(item.analysis.schema_version).to.eql(1);
+          pm.expect(item.analysis.result.confidence).to.eql(0);
+        }
       });
     language: text/javascript
 order: 5000
