@@ -12,20 +12,39 @@ import (
 	"github.com/knyongki/opsai-incident-platform/internal/worker"
 )
 
+// Worker database targets. Isolated is the default; main must be chosen explicitly.
+const (
+	TargetIsolated = "isolated"
+	TargetMain     = "main"
+)
+
 type WorkerConfig struct {
 	DatabaseURL string
+	Target      string
 	LogLevel    slog.Level
 	Policy      worker.Policy
 	Fake        worker.FakeAnalyzer
 }
 
 func LoadWorker() (WorkerConfig, error) {
-	cfg := WorkerConfig{DatabaseURL: os.Getenv("WORKER_DATABASE_URL"), Policy: worker.DefaultPolicy()}
+	cfg := WorkerConfig{Target: value("WORKER_DATABASE_TARGET", TargetIsolated), Policy: worker.DefaultPolicy()}
 	if os.Getenv("WORKER_ANALYZER") != "fake" {
-		return cfg, errors.New("WORKER_ANALYZER must explicitly be fake for the isolated 4A demo")
+		return cfg, errors.New("WORKER_ANALYZER must explicitly be fake")
 	}
-	if err := ValidateWorkerDatabaseURL(cfg.DatabaseURL); err != nil {
-		return cfg, err
+	switch cfg.Target {
+	case TargetIsolated:
+		cfg.DatabaseURL = os.Getenv("WORKER_DATABASE_URL")
+		if err := ValidateWorkerDatabaseURL(cfg.DatabaseURL); err != nil {
+			return cfg, err
+		}
+	case TargetMain:
+		// Never falls back to WORKER_DATABASE_URL: the target names exactly one database.
+		cfg.DatabaseURL = os.Getenv("DATABASE_URL")
+		if err := validateLocalDatabaseURL(cfg.DatabaseURL, "DATABASE_URL", false); err != nil {
+			return cfg, err
+		}
+	default:
+		return cfg, errors.New("WORKER_DATABASE_TARGET must be isolated or main")
 	}
 	level := strings.ToUpper(value("LOG_LEVEL", "INFO"))
 	if level != "DEBUG" && level != "INFO" && level != "WARN" && level != "ERROR" {
@@ -73,27 +92,36 @@ func LoadWorker() (WorkerConfig, error) {
 
 // The separate URL and database suffix make consuming the regular queue an explicit setup error.
 func ValidateWorkerDatabaseURL(raw string) error {
+	return validateLocalDatabaseURL(raw, "WORKER_DATABASE_URL", true)
+}
+
+// validateLocalDatabaseURL keeps the worker on localhost. Errors name the setting,
+// never its value, because the URL may contain credentials.
+func validateLocalDatabaseURL(raw, key string, testSuffix bool) error {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") ||
 		(u.Hostname() != "localhost" && u.Hostname() != "127.0.0.1" && u.Hostname() != "::1") ||
-		!strings.HasSuffix(u.Path, "_worker_test") || u.Fragment != "" {
-		return errors.New("WORKER_DATABASE_URL must target a localhost database ending in _worker_test")
+		len(u.Path) < 2 || (testSuffix && !strings.HasSuffix(u.Path, "_worker_test")) || u.Fragment != "" {
+		if testSuffix {
+			return errors.New(key + " must target a localhost database ending in _worker_test")
+		}
+		return errors.New(key + " must target a localhost database")
 	}
 	// Reject query overrides of the checked host/database, including service-file routing.
 	parameters, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
-		return errors.New("WORKER_DATABASE_URL query is malformed")
+		return errors.New(key + " query is malformed")
 	}
-	for key, values := range parameters {
+	for name, values := range parameters {
 		if len(values) != 1 {
-			return errors.New("WORKER_DATABASE_URL contains duplicate connection parameters")
+			return errors.New(key + " contains duplicate connection parameters")
 		}
-		if key != "sslmode" && key != "connect_timeout" && key != "application_name" {
-			return errors.New("WORKER_DATABASE_URL contains an unsupported connection parameter")
+		if name != "sslmode" && name != "connect_timeout" && name != "application_name" {
+			return errors.New(key + " contains an unsupported connection parameter")
 		}
 	}
 	if strings.Contains(u.Path[1:], "/") {
-		return errors.New("WORKER_DATABASE_URL database name is invalid")
+		return errors.New(key + " database name is invalid")
 	}
 	return nil
 }

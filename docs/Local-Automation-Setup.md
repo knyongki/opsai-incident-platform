@@ -300,12 +300,37 @@ If a private `.env` exists, its values still take precedence.
 | Formatting check failed | Run `gofmt -w cmd internal`, review changes, then rerun. |
 | Temporary API exits | Inspect ignored `bin/check-*.stderr.log` locally; redact sensitive content before sharing. |
 
+## Fake worker on the main database
+
+The simplest demo: the worker processes incidents created through the normal API.
+Fake results are labeled `source: "fake"` and stay stored permanently, because
+each incident holds one result. Use this only with a disposable local development
+database.
+
+1. Start the API as usual with `scripts/start-local.ps1`; it applies migrations.
+2. Add `WORKER_ANALYZER=fake` and `WORKER_DATABASE_TARGET=main` to private `.env`.
+   `WORKER_DATABASE_URL` is not used for this target. Do not run `-MigrateOnly`;
+   it refuses the main target.
+3. In another terminal, start the worker. It logs a warning that it writes to the
+   main database:
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-worker.ps1
+   ```
+
+4. In Postman, keep `base_url` at your usual API and run **Incidents - Worker
+   Result**. The incident goes `open` → `analyzing` → `analyzed` with a stored
+   fake analysis. **Incidents - Manual** passes with or without the worker.
+
+Set `WORKER_DATABASE_TARGET` back to `isolated` (or remove it) to return to the
+isolated setup below.
+
 ## Isolated fake worker
 
-The API startup command is unchanged. The fake worker is a separate, explicit
-process and must not consume the normal development queue. How it processes jobs,
-its safety rules, and all settings are described in
-[Worker and analysis](Worker-and-Analysis.md).
+The API startup command is unchanged. In the default isolated target, the fake
+worker is a separate, explicit process and must not consume the normal
+development queue. How it processes jobs, its safety rules, and all settings are
+described in [Worker and analysis](Worker-and-Analysis.md).
 
 1. Start the existing PostgreSQL container using normal API startup. Create a
    dedicated database once, using the container's configured user:
@@ -362,10 +387,10 @@ its safety rules, and all settings are described in
    Result** with the folder runner: it creates its own device and incident, then
    polls detail at most 20 times (about 500 ms apart) until the job is completed
    and `analysis` holds the stored result with `source: "fake"`. POST still returns
-   queued and incident status stays open. Polling repeats only in the runner; a
+   queued and status `open`; the poll then expects status `analyzed`. Polling repeats only in the runner; a
    single Send checks once. With `WORKER_FAKE_OUTCOME=invalid-output` that folder
    fails by design; instead run Incidents - Manual and expect `analysis_status:
-   failed` with `analysis: null`. Restore Postman's base_url to your usual API afterward.
+   failed`, status `analysis_failed`, and `analysis: null`. Restore Postman's base_url to your usual API afterward.
 
 For a visible transition, set WORKER_FAKE_DELAY to 5s before starting the worker.
 Use transient-once to demonstrate retry then success, permanent for terminal

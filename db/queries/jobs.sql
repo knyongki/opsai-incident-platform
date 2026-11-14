@@ -60,3 +60,9 @@ WHERE id = sqlc.arg(id)::uuid
   AND ((status = 'running' AND claim_token = sqlc.narg(claim_token)::uuid
         AND lease_expires_at <= clock_timestamp())
     OR (status = 'pending' AND attempt_count >= sqlc.arg(max_attempts)::integer));
+
+-- name: SetIncidentAnalysisStatus :exec
+-- Runs inside a job-owned transaction; a resolved incident keeps its status.
+UPDATE incidents
+SET status = sqlc.arg(status)::text, updated_at = clock_timestamp()
+WHERE id = sqlc.arg(id)::uuid AND status <> 'resolved';

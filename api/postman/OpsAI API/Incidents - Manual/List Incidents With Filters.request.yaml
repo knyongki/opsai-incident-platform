@@ -1,5 +1,5 @@
 $kind: http-request
-url: '{{base_url}}/api/v1/incidents?limit=20&device_id={{incident_device_id}}&status=open&severity=high&alarm_code=DEMO_DOCKING'
+url: '{{base_url}}/api/v1/incidents?limit=20&device_id={{incident_device_id}}&severity=high&alarm_code=DEMO_DOCKING'
 method: GET
 scripts:
   - type: beforeRequest
@@ -17,7 +17,7 @@ scripts:
         pm.expect(items.some(item => item.id === pm.collectionVariables.get('incident_id'))).to.eql(true);
         items.forEach(item => {
           pm.expect(item.device_id).to.eql(pm.collectionVariables.get('incident_device_id'));
-          pm.expect(item.status).to.eql('open');
+          pm.expect(item.status).to.be.oneOf(['open', 'analyzing', 'analyzed', 'analysis_failed']);
           pm.expect(item.severity).to.eql('high');
           pm.expect(item.alarm_code).to.eql('DEMO_DOCKING');
           pm.expect(item).not.to.have.property('description');

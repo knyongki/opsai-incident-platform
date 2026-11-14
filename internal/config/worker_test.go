@@ -8,7 +8,8 @@ import (
 
 func workerEnv(t *testing.T) {
 	t.Helper()
-	for _, key := range []string{"WORKER_ANALYZER", "WORKER_DATABASE_URL", "WORKER_FAKE_OUTCOME", "WORKER_FAKE_DELAY",
+	for _, key := range []string{"WORKER_ANALYZER", "WORKER_DATABASE_URL", "WORKER_DATABASE_TARGET", "DATABASE_URL",
+		"WORKER_FAKE_OUTCOME", "WORKER_FAKE_DELAY",
 		"JOB_POLL_INTERVAL", "JOB_ATTEMPT_TIMEOUT", "JOB_LEASE", "JOB_DATABASE_TIMEOUT", "JOB_RETRY_BASE",
 		"JOB_RETRY_CAP", "JOB_MAX_ATTEMPTS", "WORKER_SHUTDOWN_TIMEOUT", "LOG_LEVEL"} {
 		t.Setenv(key, "")
@@ -19,7 +20,8 @@ func workerEnv(t *testing.T) {
 func TestLoadWorker(t *testing.T) {
 	workerEnv(t)
 	cfg, err := LoadWorker()
-	if err != nil || cfg.Policy.MaxAttempts != 3 || cfg.Policy.Lease != time.Minute || cfg.Fake.Outcome != "success" {
+	if err != nil || cfg.Policy.MaxAttempts != 3 || cfg.Policy.Lease != time.Minute || cfg.Fake.Outcome != "success" ||
+		cfg.Target != TargetIsolated || !strings.HasSuffix(cfg.DatabaseURL, "_worker_test?sslmode=disable") {
 		t.Fatal("worker defaults failed")
 	}
 	t.Setenv("JOB_MAX_ATTEMPTS", "4")
@@ -48,6 +50,7 @@ func TestRejectUnsafeWorkerConfiguration(t *testing.T) {
 		{"JOB_LEASE", "1s"}, {"JOB_RETRY_CAP", "1ms"},
 		{"JOB_POLL_INTERVAL", "secret"}, {"WORKER_FAKE_DELAY", "-1s"},
 		{"WORKER_FAKE_OUTCOME", "secret"}, {"LOG_LEVEL", "secret"}, {"LOG_LEVEL", "INFO+2"},
+		{"WORKER_DATABASE_TARGET", "secret"}, {"WORKER_DATABASE_TARGET", "MAIN"},
 	} {
 		t.Run(tc.key+"/"+tc.val, func(t *testing.T) {
 			workerEnv(t)
@@ -58,4 +61,51 @@ func TestRejectUnsafeWorkerConfiguration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWorkerDatabaseTarget(t *testing.T) {
+	const main = "postgres://example:example@localhost:5432/opsai?sslmode=disable"
+	t.Run("isolated explicit", func(t *testing.T) {
+		workerEnv(t)
+		t.Setenv("WORKER_DATABASE_TARGET", "isolated")
+		t.Setenv("DATABASE_URL", main)
+		cfg, err := LoadWorker()
+		if err != nil || cfg.Target != TargetIsolated || cfg.DatabaseURL == main {
+			t.Fatal("isolated target must use only WORKER_DATABASE_URL")
+		}
+	})
+	t.Run("main uses DATABASE_URL", func(t *testing.T) {
+		workerEnv(t)
+		t.Setenv("WORKER_DATABASE_TARGET", "main")
+		t.Setenv("DATABASE_URL", main)
+		cfg, err := LoadWorker()
+		if err != nil || cfg.Target != TargetMain || cfg.DatabaseURL != main {
+			t.Fatal("main target did not select DATABASE_URL")
+		}
+	})
+	for _, raw := range []string{
+		"",
+		"postgres://example:secret@remote.example/opsai",
+		"postgres://example:secret@localhost/opsai?host=remote",
+		"postgres://example:secret@localhost/",
+		"mysql://example:secret@localhost/opsai",
+		"secret",
+	} {
+		t.Run("main rejects "+raw, func(t *testing.T) {
+			workerEnv(t)
+			t.Setenv("WORKER_DATABASE_TARGET", "main")
+			t.Setenv("DATABASE_URL", raw)
+			_, err := LoadWorker()
+			if err == nil || strings.Contains(err.Error(), "secret") {
+				t.Fatal("unsafe main database accepted or exposed")
+			}
+		})
+	}
+	t.Run("main never falls back to the worker URL", func(t *testing.T) {
+		workerEnv(t)
+		t.Setenv("WORKER_DATABASE_TARGET", "main")
+		if _, err := LoadWorker(); err == nil {
+			t.Fatal("main target used WORKER_DATABASE_URL")
+		}
+	})
 }

@@ -36,7 +36,7 @@ scripts:
           pm.expect(a.result.evidence).to.have.lengthOf(1);
           pm.expect(a.result.evidence[0].source_id).to.eql(item.id);
         });
-        pm.test('Incident stays open', () => pm.expect(item.status).to.eql('open'));
+        pm.test('Incident is marked analyzed', () => pm.expect(item.status).to.eql('analyzed'));
       }
     language: text/javascript
 order: 3000

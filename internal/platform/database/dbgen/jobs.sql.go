@@ -251,3 +251,20 @@ func (q *Queries) RecoverAnalysisJob(ctx context.Context, arg RecoverAnalysisJob
 	}
 	return result.RowsAffected(), nil
 }
+
+const setIncidentAnalysisStatus = `-- name: SetIncidentAnalysisStatus :exec
+UPDATE incidents
+SET status = $1::text, updated_at = clock_timestamp()
+WHERE id = $2::uuid AND status <> 'resolved'
+`
+
+type SetIncidentAnalysisStatusParams struct {
+	Status string
+	ID     pgtype.UUID
+}
+
+// Runs inside a job-owned transaction; a resolved incident keeps its status.
+func (q *Queries) SetIncidentAnalysisStatus(ctx context.Context, arg SetIncidentAnalysisStatusParams) error {
+	_, err := q.db.Exec(ctx, setIncidentAnalysisStatus, arg.Status, arg.ID)
+	return err
+}

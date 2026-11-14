@@ -215,8 +215,8 @@ func TestJobRepositoryIntegration(t *testing.T) {
 		}
 		assertJob(t, pool, ctx, ids[0], "completed", 2)
 		detail, err := NewIncidentRepository(pool).Get(ctx, fresh.IncidentID)
-		if err != nil || detail.Status != "open" || detail.AnalysisStatus != "completed" {
-			t.Fatal("fake completion changed incident or API mapping")
+		if err != nil || detail.Status != "analyzed" || detail.AnalysisStatus != "completed" {
+			t.Fatal("completion did not mark the incident analyzed or broke API mapping")
 		}
 	})
 	t.Run("retry then success and permanent failure", func(t *testing.T) {
@@ -372,8 +372,8 @@ func TestWorkerAnalysisIntegration(t *testing.T) {
 		if err := pool.QueryRow(ctx, `SELECT count(a.id),min(a.source) FROM incident_analyses a JOIN analysis_jobs j ON j.incident_id=a.incident_id WHERE j.id=$1`, ids[0]).Scan(&count, &source); err != nil || count != 1 || source != "fake" {
 			t.Fatal("valid fake result was not stored exactly once")
 		}
-		if err := pool.QueryRow(ctx, `SELECT i.status FROM incidents i JOIN analysis_jobs j ON j.incident_id=i.id WHERE j.id=$1`, ids[0]).Scan(&status); err != nil || status != "open" {
-			t.Fatal("worker changed incident lifecycle")
+		if err := pool.QueryRow(ctx, `SELECT i.status FROM incidents i JOIN analysis_jobs j ON j.incident_id=i.id WHERE j.id=$1`, ids[0]).Scan(&status); err != nil || status != "analyzed" {
+			t.Fatal("worker did not mark the incident analyzed")
 		}
 		detail := workerResultDetail(t, pool, ctx, ids[0])
 		a := detail.Analysis

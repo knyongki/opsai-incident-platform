@@ -188,7 +188,7 @@ snapshot: rows inserted ahead of the boundary require starting again from the
 first page, and changing filter fields can change page membership.
 
 ```powershell
-$filters = "device_id=$($demoDevice.data.id)&status=open&severity=high"
+$filters = "device_id=$($demoDevice.data.id)&severity=high"
 $firstPage = Invoke-RestMethod "$base/api/v1/incidents?limit=1&$filters"
 $firstPage.data.items
 if ($firstPage.data.page.has_more) {
@@ -207,6 +207,20 @@ Detail returns the summary fields plus `description`, `raw_logs`, `resolved_at`,
 and `analysis`. `alarm_code`, `occurred_at`, and `resolved_at` are JSON null when
 absent; `raw_logs` is always an array. An invalid UUID returns 400 and a
 nonexistent incident returns 404 `NOT_FOUND`.
+
+`status` is the incident lifecycle. The worker changes it in the same transaction
+as the job, so `status` and `analysis_status` always agree within one response:
+
+| `status` | Meaning | `analysis_status` |
+| --- | --- | --- |
+| `open` | Created and not yet picked up | `queued` |
+| `analyzing` | A worker claimed the job, or a retry is waiting | `running` or `queued` |
+| `analyzed` | A validated result is stored | `completed` |
+| `analysis_failed` | The job failed permanently or ran out of attempts | `failed` |
+| `resolved` | Reserved; no endpoint sets it yet, and the worker never overwrites it | any |
+
+Incidents whose job finished before this lifecycle existed keep `open`; they are
+not backfilled. `updated_at` changes with each transition.
 
 `analysis_status` comes from the incident's job: `pending` is shown as `queued`;
 `running`, `completed`, and `failed` keep their names. Job IDs, attempt counts,

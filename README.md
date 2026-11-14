@@ -24,7 +24,8 @@ not replace qualified engineering judgment.
 - **Browse incidents:** filter by device, status, severity, or alarm code, with
   stable cursor pagination.
 - **Get structured analysis:** a separate worker processes each job and stores a
-  strictly validated result, shown on the incident as `analysis`.
+  strictly validated result, shown on the incident as `analysis`. The incident
+  status follows along: `open` → `analyzing` → `analyzed` or `analysis_failed`.
 
 ## How it works
 
@@ -85,8 +86,10 @@ the [Postman quickstart](docs/Postman-Quickstart.md) or the PowerShell examples 
 the [API reference](docs/API-Reference.md). Press Ctrl+C to stop the API;
 PostgreSQL keeps running and keeps its data.
 
-To see analysis results, run the fake worker against its separate test database:
-[isolated worker setup](docs/Local-Automation-Setup.md#isolated-fake-worker).
+To see analysis results, run the fake worker on the same database as the API
+([main-database worker](docs/Local-Automation-Setup.md#fake-worker-on-the-main-database))
+or against a separate test database
+([isolated worker setup](docs/Local-Automation-Setup.md#isolated-fake-worker)).
 
 ## API at a glance
 
@@ -108,7 +111,7 @@ Example incident detail after analysis (fields shortened):
     "id": "00000000-0000-4000-8000-000000000001",
     "title": "Demo docking failure",
     "severity": "high",
-    "status": "open",
+    "status": "analyzed",
     "analysis_status": "completed",
     "analysis": {
       "schema_version": 1,
@@ -199,7 +202,6 @@ for reads and writes, and 60 seconds for idle connections.
 Planned work from the [project blueprint](docs/OpsAI-Project-Blueprint.md):
 
 - Real AI provider with a versioned prompt, structured output, and tool calling.
-- Incident lifecycle transitions (analyzing, analyzed, analysis failed).
 - Retrieval of similar resolved incidents, engineer review, and resolution.
 - Authentication and roles, MQTT telemetry, OpenAPI docs, and CI.
 

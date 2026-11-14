@@ -13,13 +13,21 @@ To run the worker locally, follow the
 
 - The worker runs only when `WORKER_ANALYZER=fake` is set explicitly; there is no
   enabling default.
-- It uses its own `WORKER_DATABASE_URL`, which must be a localhost database whose
-  name ends in `_worker_test`. It never falls back to `DATABASE_URL`. URLs allow
-  only `sslmode`, `connect_timeout`, and `application_name` query parameters, so
-  connection overrides cannot bypass this check.
+- `WORKER_DATABASE_TARGET` chooses exactly one database, and both targets must be
+  on localhost:
+  - `isolated` (the default) uses `WORKER_DATABASE_URL`, whose name must end in
+    `_worker_test`. It never falls back to `DATABASE_URL`.
+  - `main` uses `DATABASE_URL`, the API's database, and never falls back to
+    `WORKER_DATABASE_URL`. Startup logs a warning. Fake results written there are
+    permanent: each incident holds one result and reanalysis is not modeled.
+
+  URLs allow only `sslmode`, `connect_timeout`, and `application_name` query
+  parameters, so connection overrides cannot bypass these checks.
 - Fake results are labeled `source: "fake"`, state that no diagnosis was performed,
   use confidence 0, and reference only the incident itself as evidence.
-- Incidents stay `open`; the worker does not change the incident lifecycle.
+- The worker moves the incident status with the job in one transaction:
+  `analyzing` on claim (and while a retry waits), `analyzed` with a stored result,
+  `analysis_failed` on a terminal failure. A `resolved` incident is never changed.
 - Result bodies, raw analyzer output, and database errors are never logged. Only
   safe error codes are stored.
 
@@ -64,7 +72,8 @@ policy, and never mix worker versions that complete jobs differently.
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `WORKER_ANALYZER` | Empty; must explicitly be `fake` | Enables only the fake implementation |
-| `WORKER_DATABASE_URL` | Required for the worker | Separate localhost database ending in `_worker_test` |
+| `WORKER_DATABASE_TARGET` | `isolated` | `isolated` uses `WORKER_DATABASE_URL`; `main` uses `DATABASE_URL` |
+| `WORKER_DATABASE_URL` | Required for the isolated target | Separate localhost database ending in `_worker_test` |
 | `WORKER_FAKE_OUTCOME` | `success` | `success`, `transient`, `permanent`, `transient-once`, or `invalid-output` |
 | `WORKER_FAKE_DELAY` | `100ms` | Simulated work; cancellation-aware |
 | `JOB_POLL_INTERVAL` | `1s` | Idle polling delay |

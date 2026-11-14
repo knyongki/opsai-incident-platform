@@ -52,12 +52,14 @@ saves `incident_id` for the detail request. Future edits still require explicit 
 
 Incident requests create persistent records. Repeating POST creates another
 incident and job. `queued` means the job is stored. Normal startup runs only the
-API. The optional [fake worker](Worker-and-Analysis.md) runs
-against a separate test database and creates no AI findings. Detail assertions
-allow queued/running/completed/failed while incident status remains open, and
-require `analysis` to be null unless the job is completed. To see a stored fake
-result, run **Incidents - Worker Result** against the
-[isolated worker setup](Local-Automation-Setup.md#isolated-fake-worker);
+API. The optional [fake worker](Worker-and-Analysis.md) runs against a separate
+test database by default, or against the main database when explicitly
+configured, and creates no AI findings. Detail assertions accept any job status
+with its matching incident status (for example `queued` with `open` or
+`analyzing`, `completed` with `analyzed`), and require `analysis` to be null unless
+the job is completed. To see a stored fake result, run **Incidents - Worker
+Result** with the [main-database worker](Local-Automation-Setup.md#fake-worker-on-the-main-database)
+or against the [isolated worker setup](Local-Automation-Setup.md#isolated-fake-worker);
 it fails without a running worker.
 HTTP assertions do not replace the repository transaction integration tests.
 

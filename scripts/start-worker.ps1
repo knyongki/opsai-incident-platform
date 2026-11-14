@@ -12,6 +12,10 @@ try {
         $previous[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
         [Environment]::SetEnvironmentVariable($key, $settings[$key], 'Process')
     }
+    $target = if ([string]::IsNullOrWhiteSpace($settings.WORKER_DATABASE_TARGET)) { 'isolated' } else { $settings.WORKER_DATABASE_TARGET }
+    if ($MigrateOnly -and $target -eq 'main') {
+        throw 'WORKER_DATABASE_TARGET=main uses the main database, which scripts/start-local.ps1 already migrates. MigrateOnly applies only to the isolated worker database.'
+    }
     if ($MigrateOnly) {
         & go run ./cmd/worker -check-config
         if ($LASTEXITCODE -ne 0) { throw 'Worker configuration validation failed.' }
@@ -46,7 +50,11 @@ try {
         }
         return
     }
-    Write-Host 'Starting the explicit fake worker. Its separate test database must already be migrated.'
+    if ($target -eq 'main') {
+        Write-Host 'Starting the explicit fake worker on the main local database. Results are labeled fake and stay stored.'
+    } else {
+        Write-Host 'Starting the explicit fake worker. Its separate test database must already be migrated.'
+    }
     & go run ./cmd/worker
     if ($LASTEXITCODE -ne 0) { throw 'Worker stopped with an error.' }
 } finally {

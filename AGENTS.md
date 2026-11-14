@@ -30,13 +30,17 @@ Postman/documentation updates. Milestone 4A is complete in [the task status](doc
 the separate fake worker, claim-token/lease migration 00003, bounded retries and
 recovery, tests, local configuration, and documentation. Implementation and this
 migration were approved together by the user's request to execute the plan.
-Future migrations still need explicit approval. Keep fake execution on a separate
-localhost database ending in _worker_test; incidents remain open. Milestone 4B
+Future migrations still need explicit approval. Fake execution stays on localhost:
+the default isolated target uses a separate database ending in _worker_test, and
+WORKER_DATABASE_TARGET=main must be chosen explicitly. Milestone 4B
 (4B.1-4B.4) is complete: the fake worker validates results and stores them
 atomically with job completion, and incident detail returns them as a labeled
 `analysis` field. H1 (HTTP hardening) is complete: a standard-library ServeMux
 router, request ID/access log/panic recovery middleware, the check-local
--Integration option, tests, and docs. No later milestone is authorized yet.
+-Integration option, tests, and docs. L1 is complete: an explicit
+WORKER_DATABASE_TARGET=main option for the fake worker and incident status
+transitions in the job transactions.
+No later milestone is authorized yet.
 Do not add incident update endpoints, real AI, MQTT,
 authentication, cloud synchronization, CI workflows, or later features without
 an explicit new user request. The blueprint is a roadmap, not blanket authorization.
@@ -65,7 +69,8 @@ not authorization to implement later features.
   recovery), handlers, JSON envelopes, and HTTP server settings.
 - `api/postman/OpsAI API` is the versioned local API collection.
 - `scripts/start-local.ps1` starts PostgreSQL, migrations, and the API.
-- `scripts/start-worker.ps1` starts only the fake worker; -MigrateOnly migrates its separate test database.
+- `scripts/start-worker.ps1` starts only the fake worker; -MigrateOnly migrates its separate test database
+  (the main target refuses it, because start-local.ps1 migrates the main database).
 - `scripts/check-local.ps1` runs local validation.
 - `scripts/local-environment.ps1` loads private local configuration for the local scripts.
 

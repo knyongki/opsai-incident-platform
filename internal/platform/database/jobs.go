@@ -65,7 +65,7 @@ func (r *JobRepository) Claim(ctx context.Context) (worker.Job, error) {
 		}
 		job = worker.Job{ID: uuidString(row.ID), IncidentID: uuidString(row.IncidentID),
 			Token: uuidString(row.ClaimToken), Attempt: int(row.AttemptCount)}
-		return nil
+		return setIncidentStatus(ctx, q, row.IncidentID, row.Status)
 	})
 	if err != nil {
 		return worker.Job{}, err
@@ -148,7 +148,7 @@ func (r *JobRepository) Finish(ctx context.Context, job worker.Job, outcome work
 		if n != 1 {
 			return worker.ErrOwnership
 		}
-		return nil
+		return setIncidentStatus(ctx, q, row.IncidentID, outcome.Status)
 	})
 }
 
@@ -202,7 +202,7 @@ func (r *JobRepository) FinishWithResult(ctx context.Context, job worker.Job, re
 		if n != 1 {
 			return worker.ErrOwnership
 		}
-		return nil
+		return setIncidentStatus(ctx, q, row.IncidentID, "completed")
 	})
 }
 func (r *JobRepository) Recover(ctx context.Context) error {
@@ -224,7 +224,30 @@ func (r *JobRepository) Recover(ctx context.Context) error {
 			if err != nil || n != 1 {
 				return worker.ErrRepository
 			}
+			if err := setIncidentStatus(ctx, q, row.IncidentID, outcome.Status); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
+}
+
+// setIncidentStatus moves the incident with its job inside the same transaction.
+// A job going back to pending leaves the incident analyzing until a terminal outcome.
+func setIncidentStatus(ctx context.Context, q *dbgen.Queries, incidentID pgtype.UUID, jobStatus string) error {
+	var status string
+	switch jobStatus {
+	case "running":
+		status = "analyzing"
+	case "completed":
+		status = "analyzed"
+	case "failed":
+		status = "analysis_failed"
+	default:
+		return nil
+	}
+	if err := q.SetIncidentAnalysisStatus(ctx, dbgen.SetIncidentAnalysisStatusParams{ID: incidentID, Status: status}); err != nil {
+		return worker.ErrRepository
+	}
+	return nil
 }

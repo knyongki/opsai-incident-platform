@@ -50,7 +50,11 @@ func run(checkConfig bool) error {
 		pool.Close()
 		return err
 	}
-	logger.Info("fake worker started", "concurrency", 1)
+	if cfg.Target == config.TargetMain {
+		logger.Warn("fake worker is writing labeled fake results to the main local database",
+			"database_target", cfg.Target)
+	}
+	logger.Info("fake worker started", "database_target", cfg.Target, "concurrency", 1)
 	err = serve(ctx, w.Run, cfg.Policy.ShutdownTimeout)
 	// On a shutdown timeout main exits the process; pool.Close could otherwise block indefinitely.
 	if err != nil {

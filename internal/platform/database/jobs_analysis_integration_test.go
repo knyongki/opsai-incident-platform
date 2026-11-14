@@ -221,7 +221,8 @@ type execFaultTx struct {
 
 func (tx execFaultTx) Exec(ctx context.Context, query string, args ...any) (pgconn.CommandTag, error) {
 	if tx.fail == "insert" && strings.Contains(query, "INSERT INTO incident_analyses") ||
-		tx.fail == "finish" && strings.Contains(query, "UPDATE analysis_jobs") {
+		tx.fail == "finish" && strings.Contains(query, "UPDATE analysis_jobs") ||
+		tx.fail == "incident" && strings.Contains(query, "UPDATE incidents") {
 		return pgconn.CommandTag{}, errors.New("synthetic transaction failure")
 	}
 	return tx.Tx.Exec(ctx, query, args...)
