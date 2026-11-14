@@ -46,8 +46,8 @@ JSON content type, and the response envelope, UUID, and status values.
 Run **Incidents - Manual** in order, or send its seven requests individually in that
 order. It creates its own device, independent of the device CRUD folder and its
 cleanup. After an incident references a device, deleting that device returns
-**409 Conflict**. The cloud collection now includes the 3B read requests following
-an explicitly requested sync. Refresh the collection to see them. Create Incident
+**409 Conflict**. The cloud collection now includes the 3B read requests and the
+4B.4 worker-result folder and detail assertions, following explicitly requested syncs. Refresh the collection to see them. Create Incident
 saves `incident_id` for the detail request. Future edits still require explicit sync.
 
 Incident requests create persistent records. Repeating POST creates another

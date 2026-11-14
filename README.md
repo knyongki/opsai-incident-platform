@@ -436,8 +436,9 @@ incident_id, then the read requests check list, combined filters, complete detai
 invalid UUID, and a missing incident; detail requires `analysis` to be null unless the
 job is completed. **Incidents - Worker Result** checks a stored fake result; run it only
 with the [isolated worker setup](docs/Local-Automation-Setup.md#isolated-fake-worker-milestone-4a).
-The 3B requests were synchronized to the cloud
-collection on explicit request and fetched back for verification. Automatic
+The 3B requests and the 4B.4 changes (detail
+assertions, the worker-result folder, and its `worker_` variables) were synchronized
+to the cloud collection on explicit request and compared with the local files. Automatic
 validation continues to run only **System**; later edits are not automatically synced.
 
 To run the device and incident repository integration tests with private .env in an isolated process:
