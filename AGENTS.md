@@ -103,6 +103,25 @@ not authorization to implement later features.
 Inspect repository status and preserve all existing files and uncommitted work.
 Give a short plan before implementation.
 
+### Test first
+
+Every behavior change starts with a test, before the function, handler, query, or
+API it covers:
+
+1. Write or update the test that describes the new or changed behavior: a unit
+   test for domain, worker, config, or analyzer logic; an `httptest` handler test
+   for HTTP behavior; a tagged integration test for SQL, transactions, and
+   migrations; and a local Postman assertion for API contract changes.
+2. Run it and confirm it fails for the expected reason. A compile error from a
+   missing function counts; a test that passes before the change proves nothing.
+3. Implement the smallest change that makes it pass, then run the full checks below.
+
+Plans in `docs/Tasks.md` list the tests to write first for each step. Reports state
+which tests were written first and that they failed before the implementation.
+Bug fixes start with a test that reproduces the bug. Documentation-only changes,
+comment cleanup, and regenerated sqlc code need no new test; pure refactors rely on
+the existing tests passing unchanged.
+
 ### After Go changes
 
 Run these commands:
