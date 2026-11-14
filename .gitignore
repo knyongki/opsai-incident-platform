@@ -3,6 +3,9 @@
 .env.*
 !.env.example
 
+# Personal Claude Code settings; shared settings live in .claude/settings.json.
+.claude/settings.local.json
+
 # Local build and test artifacts.
 /bin/
 *.exe
