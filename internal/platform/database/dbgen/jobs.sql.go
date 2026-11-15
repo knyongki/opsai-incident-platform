@@ -88,9 +88,11 @@ func (q *Queries) FinishAnalysisJob(ctx context.Context, arg FinishAnalysisJobPa
 }
 
 const getClaimedAnalysisInput = `-- name: GetClaimedAnalysisInput :one
-SELECT i.id, i.title, i.description, i.alarm_code, i.severity, i.raw_logs, i.occurred_at
+SELECT i.id, i.title, i.description, i.alarm_code, i.severity, i.raw_logs, i.occurred_at,
+       d.name AS device_name, d.type AS device_type, d.location AS device_location
 FROM analysis_jobs j
 JOIN incidents i ON i.id = j.incident_id
+JOIN devices d ON d.id = i.device_id
 WHERE j.id = $1::uuid
     AND j.claim_token = $2::uuid
     AND j.status = 'running'
@@ -103,13 +105,16 @@ type GetClaimedAnalysisInputParams struct {
 }
 
 type GetClaimedAnalysisInputRow struct {
-	ID          pgtype.UUID
-	Title       string
-	Description string
-	AlarmCode   pgtype.Text
-	Severity    string
-	RawLogs     []string
-	OccurredAt  pgtype.Timestamptz
+	ID             pgtype.UUID
+	Title          string
+	Description    string
+	AlarmCode      pgtype.Text
+	Severity       string
+	RawLogs        []string
+	OccurredAt     pgtype.Timestamptz
+	DeviceName     string
+	DeviceType     string
+	DeviceLocation pgtype.Text
 }
 
 func (q *Queries) GetClaimedAnalysisInput(ctx context.Context, arg GetClaimedAnalysisInputParams) (GetClaimedAnalysisInputRow, error) {
@@ -123,14 +128,18 @@ func (q *Queries) GetClaimedAnalysisInput(ctx context.Context, arg GetClaimedAna
 		&i.Severity,
 		&i.RawLogs,
 		&i.OccurredAt,
+		&i.DeviceName,
+		&i.DeviceType,
+		&i.DeviceLocation,
 	)
 	return i, err
 }
 
 const insertIncidentAnalysis = `-- name: InsertIncidentAnalysis :exec
-INSERT INTO incident_analyses (id, incident_id, schema_version, source, result)
+INSERT INTO incident_analyses (id, incident_id, schema_version, source, result, model_name, prompt_version)
 VALUES ($1::uuid, $2::uuid, $3::integer,
-        $4::text, $5::jsonb)
+        $4::text, $5::jsonb,
+        $6::text, $7::text)
 `
 
 type InsertIncidentAnalysisParams struct {
@@ -139,6 +148,8 @@ type InsertIncidentAnalysisParams struct {
 	SchemaVersion int32
 	Source        string
 	Result        []byte
+	ModelName     pgtype.Text
+	PromptVersion pgtype.Text
 }
 
 func (q *Queries) InsertIncidentAnalysis(ctx context.Context, arg InsertIncidentAnalysisParams) error {
@@ -148,6 +159,8 @@ func (q *Queries) InsertIncidentAnalysis(ctx context.Context, arg InsertIncident
 		arg.SchemaVersion,
 		arg.Source,
 		arg.Result,
+		arg.ModelName,
+		arg.PromptVersion,
 	)
 	return err
 }
@@ -245,6 +258,41 @@ func (q *Queries) RecoverAnalysisJob(ctx context.Context, arg RecoverAnalysisJob
 		arg.ID,
 		arg.ClaimToken,
 		arg.MaxAttempts,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const releaseAnalysisJob = `-- name: ReleaseAnalysisJob :execrows
+UPDATE analysis_jobs
+SET status = 'pending', attempt_count = attempt_count - 1,
+    available_at = clock_timestamp() + $1::bigint * interval '1 millisecond',
+    last_error = $2::text,
+    claim_token = NULL, locked_at = NULL, lease_expires_at = NULL,
+    updated_at = clock_timestamp()
+WHERE id = $3::uuid AND status = 'running'
+    AND claim_token = $4::uuid
+    AND lease_expires_at > clock_timestamp()
+    AND attempt_count > 0
+`
+
+type ReleaseAnalysisJobParams struct {
+	DelayMs    int64
+	ErrorCode  string
+	ID         pgtype.UUID
+	ClaimToken pgtype.UUID
+}
+
+// Returns an owned job to the queue without consuming its attempt, for failures
+// caused by worker configuration rather than by the job.
+func (q *Queries) ReleaseAnalysisJob(ctx context.Context, arg ReleaseAnalysisJobParams) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseAnalysisJob,
+		arg.DelayMs,
+		arg.ErrorCode,
+		arg.ID,
+		arg.ClaimToken,
 	)
 	if err != nil {
 		return 0, err

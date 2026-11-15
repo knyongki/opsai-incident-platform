@@ -170,6 +170,15 @@ func TestIncidentDetailHTTPStoredAnalysis(t *testing.T) {
 			} `json:"analysis"`
 		} `json:"data"`
 	}
+	var raw struct {
+		Data struct {
+			Analysis map[string]json.RawMessage `json:"analysis"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil || len(raw.Data.Analysis) != 7 ||
+		string(raw.Data.Analysis["model_name"]) != "null" || string(raw.Data.Analysis["prompt_version"]) != "null" {
+		t.Fatalf("fake analysis must expose null model_name and prompt_version: %s", w.Body.String())
+	}
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &envelope) != nil || envelope.Data.Analysis == nil {
 		t.Fatalf("stored analysis not served: %d %s", w.Code, w.Body.String())
 	}
@@ -217,5 +226,36 @@ func TestIncidentReadErrorsAndRouting(t *testing.T) {
 		if !strings.Contains(w.Body.String(), `"error":`) {
 			t.Fatal("missing error envelope")
 		}
+	}
+}
+
+func TestIncidentDetailHTTPClaudeProvenance(t *testing.T) {
+	id := "12345678-1234-4234-8234-123456789abc"
+	model, prompt := "claude-opus-5-5", "incident-analysis-v1"
+	s := &incidentReadStub{detail: incident.Detail{
+		Summary: incident.Summary{ID: id, AnalysisStatus: "completed", Status: "analyzed"}, RawLogs: []string{},
+		Analysis: &incident.Analysis{ID: "87654321-4321-4321-8321-cba987654321", SchemaVersion: 1, Source: "claude",
+			ModelName: &model, PromptVersion: &prompt, CreatedAt: time.Date(2026, 11, 15, 1, 0, 0, 0, time.UTC),
+			Result: analysis.Result{Summary: "s", PrimarySuspectedCause: "c", ContributingFactors: []string{},
+				ObservedConditions: []string{"o"}, RecommendedActions: []analysis.Action{}, SafetyNotes: []string{"n"},
+				Confidence: 0.4, Evidence: []analysis.Evidence{{SourceID: id, Claim: "x"}}}},
+	}}
+	w := httptest.NewRecorder()
+	readHandler(s).ServeHTTP(w, httptest.NewRequest("GET", "/api/v1/incidents/"+id, nil))
+	var body struct {
+		Data struct {
+			Analysis struct {
+				Source        string  `json:"source"`
+				ModelName     *string `json:"model_name"`
+				PromptVersion *string `json:"prompt_version"`
+			} `json:"analysis"`
+		} `json:"data"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &body) != nil {
+		t.Fatalf("claude analysis not served: %d %s", w.Code, w.Body.String())
+	}
+	a := body.Data.Analysis
+	if a.Source != "claude" || a.ModelName == nil || *a.ModelName != model || a.PromptVersion == nil || *a.PromptVersion != prompt {
+		t.Fatalf("claude provenance missing: %+v", a)
 	}
 }

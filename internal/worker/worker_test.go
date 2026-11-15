@@ -16,10 +16,13 @@ import (
 type repoStub struct {
 	claimErr, recoverErr, loadErr, finishErr, resultErr error
 	claims, recoveries, loads, finishes, resultFinishes int
+	releases                                            int
+	releaseCode                                         string
 	job                                                 Job
 	input                                               AnalysisInput
 	outcome                                             Outcome
 	result                                              analysis.Result
+	provenance                                          analysis.Provenance
 }
 
 func (r *repoStub) Claim(ctx context.Context) (Job, error) { r.claims++; return r.job, r.claimErr }
@@ -39,16 +42,30 @@ func (r *repoStub) Finish(ctx context.Context, j Job, o Outcome) error {
 	r.outcome = o
 	return r.finishErr
 }
-func (r *repoStub) FinishWithResult(_ context.Context, _ Job, result analysis.Result) error {
+func (r *repoStub) Release(_ context.Context, _ Job, code string) error {
+	r.releases++
+	r.releaseCode = code
+	return nil
+}
+func (r *repoStub) FinishWithResult(_ context.Context, _ Job, result analysis.Result, p analysis.Provenance) error {
 	r.resultFinishes++
 	r.result = result
+	r.provenance = p
 	r.outcome = Outcome{Status: "completed"}
 	return r.resultErr
 }
 
+// analyzerFunc adapts a raw-JSON test analyzer to the fake source.
 type analyzerFunc func(context.Context, AnalysisInput) ([]byte, error)
 
-func (f analyzerFunc) Analyze(c context.Context, input AnalysisInput) ([]byte, error) {
+func (f analyzerFunc) Analyze(c context.Context, input AnalysisInput) (Output, error) {
+	data, err := f(c, input)
+	return Output{JSON: data, Provenance: analysis.Provenance{Source: analysis.SourceFake}}, err
+}
+
+type outputAnalyzer func(context.Context, AnalysisInput) (Output, error)
+
+func (f outputAnalyzer) Analyze(c context.Context, input AnalysisInput) (Output, error) {
 	return f(c, input)
 }
 
@@ -315,6 +332,108 @@ func TestPolicyAndFake(t *testing.T) {
 	for _, o := range []Outcome{{Status: "bad"}, {Status: "completed", Code: "secret"}, {Status: "failed", Code: "secret"}, {Status: "pending", Code: "ANALYSIS_TRANSIENT", Delay: -1}} {
 		if ValidOutcome(o) {
 			t.Fatal("unsafe outcome accepted")
+		}
+	}
+}
+
+func TestStepStoresAnalyzerProvenance(t *testing.T) {
+	r := &repoStub{job: testJob(1)}
+	var logs bytes.Buffer
+	want := analysis.Provenance{Source: analysis.SourceClaude, ModelName: "claude-opus-5-5", PromptVersion: "incident-analysis-v1"}
+	w, err := New(r, outputAnalyzer(func(_ context.Context, in AnalysisInput) (Output, error) {
+		return Output{JSON: validOutput(in.IncidentID), Provenance: want, Usage: Usage{InputTokens: 1234, OutputTokens: 567}}, nil
+	}), DefaultPolicy(), slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r.resultFinishes != 1 || r.provenance != want {
+		t.Fatalf("provenance not stored: %+v", r.provenance)
+	}
+	for _, field := range []string{`"source":"claude"`, `"model_name":"claude-opus-5-5"`, `"prompt_version":"incident-analysis-v1"`,
+		`"input_tokens":1234`, `"output_tokens":567`} {
+		if !strings.Contains(logs.String(), field) {
+			t.Errorf("finished log is missing %s: %s", field, logs.String())
+		}
+	}
+	if strings.Contains(logs.String(), "Synthetic summary") {
+		t.Error("analysis content was logged")
+	}
+}
+
+func TestStepProviderOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		err          error
+		status, code string
+		stepErr      error
+	}{
+		{"refused", ErrRefused, "failed", "ANALYSIS_REFUSED", nil},
+		{"truncated or malformed", ErrInvalidOutput, "failed", "ANALYSIS_INVALID_OUTPUT", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &repoStub{job: testJob(1)}
+			w, err := New(r, outputAnalyzer(func(context.Context, AnalysisInput) (Output, error) {
+				return Output{}, tc.err
+			}), DefaultPolicy(), slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = w.Step(context.Background())
+			if tc.stepErr == nil && err != nil || tc.stepErr != nil && !errors.Is(err, tc.stepErr) {
+				t.Fatalf("Step error = %v, want %v", err, tc.stepErr)
+			}
+			if r.finishes != 1 || r.resultFinishes != 0 || r.outcome.Status != tc.status || r.outcome.Code != tc.code {
+				t.Fatalf("unexpected outcome: %+v", r.outcome)
+			}
+			if !ValidOutcome(r.outcome) {
+				t.Fatal("outcome rejected by ValidOutcome")
+			}
+		})
+	}
+}
+
+func TestRunStopsOnProviderConfiguration(t *testing.T) {
+	r := &repoStub{job: testJob(1)}
+	w, err := New(r, outputAnalyzer(func(context.Context, AnalysisInput) (Output, error) {
+		return Output{}, ErrProviderConfig
+	}), DefaultPolicy(), slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- w.Run(context.Background()) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrProviderConfig) {
+			t.Fatalf("Run returned %v, want ErrProviderConfig", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker kept claiming jobs after a provider configuration error")
+	}
+	if r.claims != 1 {
+		t.Fatalf("claims = %d, want 1", r.claims)
+	}
+}
+
+// A provider-config error must never fail or charge the job, including on its
+// last allowed attempt: the job is released and the attempt is returned.
+func TestStepReleasesJobOnProviderConfiguration(t *testing.T) {
+	for _, attempt := range []int{1, DefaultPolicy().MaxAttempts} {
+		r := &repoStub{job: testJob(attempt)}
+		w, err := New(r, outputAnalyzer(func(context.Context, AnalysisInput) (Output, error) {
+			return Output{}, ErrProviderConfig
+		}), DefaultPolicy(), slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Step(context.Background()); !errors.Is(err, ErrProviderConfig) {
+			t.Fatalf("attempt %d: Step error = %v", attempt, err)
+		}
+		if r.releases != 1 || r.releaseCode != "ANALYSIS_PROVIDER_CONFIG" || r.finishes != 0 || r.resultFinishes != 0 {
+			t.Fatalf("attempt %d: job was not released: releases=%d finishes=%d", attempt, r.releases, r.finishes)
 		}
 	}
 }

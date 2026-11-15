@@ -31,14 +31,23 @@ scripts:
         pm.expect(item.status).to.be.oneOf(allowed[item.analysis_status]);
       });
       // Without a worker the job stays queued; a legacy completed job may also have no result.
-      pm.test('Analysis is null unless completed, and labeled fake when present', () => {
+      pm.test('Analysis is null unless completed, and labeled with its provenance when present', () => {
         const item = pm.response.json().data;
         if (item.analysis_status !== 'completed') pm.expect(item.analysis).to.eql(null);
         if (item.analysis !== null) {
-          pm.expect(item.analysis).to.have.all.keys('id', 'schema_version', 'source', 'created_at', 'result');
-          pm.expect(item.analysis.source).to.eql('fake');
-          pm.expect(item.analysis.schema_version).to.eql(1);
-          pm.expect(item.analysis.result.confidence).to.eql(0);
+          const a = item.analysis;
+          pm.expect(a).to.have.all.keys('id', 'schema_version', 'source', 'model_name', 'prompt_version', 'created_at', 'result');
+          pm.expect(a.source).to.be.oneOf(['fake', 'claude', 'openai']);
+          pm.expect(a.schema_version).to.eql(1);
+          if (a.source === 'fake') {
+            pm.expect(a.model_name).to.eql(null);
+            pm.expect(a.prompt_version).to.eql(null);
+            pm.expect(a.result.confidence).to.eql(0);
+          } else {
+            pm.expect(a.model_name).to.be.a('string').and.not.empty;
+            pm.expect(a.prompt_version).to.be.a('string').and.not.empty;
+            pm.expect(a.result.confidence).to.be.within(0, 1);
+          }
         }
       });
     language: text/javascript

@@ -55,4 +55,6 @@ type IncidentAnalysis struct {
 	Source        string
 	Result        []byte
 	CreatedAt     pgtype.Timestamptz
+	ModelName     pgtype.Text
+	PromptVersion pgtype.Text
 }

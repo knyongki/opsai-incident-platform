@@ -47,7 +47,7 @@ func TestFinishWithResultIntegration(t *testing.T) {
 			t.Fatal("observer connection unavailable")
 		}
 		defer conn.Release()
-		if err := repo.FinishWithResult(ctx, job, analysisFixture(job.IncidentID)); err != nil {
+		if err := repo.FinishWithResult(ctx, job, analysisFixture(job.IncidentID), fakeProvenance); err != nil {
 			t.Fatal("atomic finish failed")
 		}
 		var status, source, stored string
@@ -74,7 +74,7 @@ func TestFinishWithResultIntegration(t *testing.T) {
 		}
 		bad := analysisFixture(job.IncidentID)
 		bad.Confidence = 2
-		if err := repo.FinishWithResult(ctx, job, bad); !errors.Is(err, analysis.ErrInvalid) {
+		if err := repo.FinishWithResult(ctx, job, bad, fakeProvenance); !errors.Is(err, analysis.ErrInvalid) {
 			t.Fatal("invalid result accepted")
 		}
 		assertNoAnalysis(t, pool, ctx, job.IncidentID)
@@ -97,7 +97,7 @@ func TestFinishWithResultIntegration(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := faulty.FinishWithResult(ctx, job, analysisFixture(job.IncidentID)); !errors.Is(err, worker.ErrRepository) {
+			if err := faulty.FinishWithResult(ctx, job, analysisFixture(job.IncidentID), fakeProvenance); !errors.Is(err, worker.ErrRepository) {
 				t.Fatal("injected persistence failure was not returned")
 			}
 			assertNoAnalysis(t, observer, ctx, job.IncidentID)
@@ -112,7 +112,7 @@ func TestFinishWithResultIntegration(t *testing.T) {
 			t.Fatal("claim failed")
 		}
 		expireJob(t, pool, ctx, job.ID)
-		if err := repo.FinishWithResult(ctx, job, analysisFixture(job.IncidentID)); !errors.Is(err, worker.ErrOwnership) {
+		if err := repo.FinishWithResult(ctx, job, analysisFixture(job.IncidentID), fakeProvenance); !errors.Is(err, worker.ErrOwnership) {
 			t.Fatal("expired owner accepted")
 		}
 		assertNoAnalysis(t, pool, ctx, job.IncidentID)
@@ -124,10 +124,10 @@ func TestFinishWithResultIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal("reclaim failed")
 		}
-		if err := repo.FinishWithResult(ctx, job, analysisFixture(job.IncidentID)); !errors.Is(err, worker.ErrOwnership) {
+		if err := repo.FinishWithResult(ctx, job, analysisFixture(job.IncidentID), fakeProvenance); !errors.Is(err, worker.ErrOwnership) {
 			t.Fatal("stale owner accepted")
 		}
-		if err := repo.FinishWithResult(ctx, fresh, analysisFixture(fresh.IncidentID)); err != nil {
+		if err := repo.FinishWithResult(ctx, fresh, analysisFixture(fresh.IncidentID), fakeProvenance); err != nil {
 			t.Fatal("new owner could not finish")
 		}
 	})
@@ -142,7 +142,7 @@ func TestFinishWithResultIntegration(t *testing.T) {
 			VALUES($1,$2,1,'fake','{"marker":"original"}')`, integrationID(t), job.IncidentID); err != nil {
 			t.Fatal("seed existing analysis failed")
 		}
-		if err := repo.FinishWithResult(ctx, job, analysisFixture(job.IncidentID)); !errors.Is(err, worker.ErrRepository) {
+		if err := repo.FinishWithResult(ctx, job, analysisFixture(job.IncidentID), fakeProvenance); !errors.Is(err, worker.ErrRepository) {
 			t.Fatal("duplicate result was treated as success")
 		}
 		var result string
@@ -172,7 +172,7 @@ func TestFinishWithResultIntegration(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := faulty.FinishWithResult(ctx, job, analysisFixture(job.IncidentID)); !errors.Is(err, worker.ErrRepository) {
+			if err := faulty.FinishWithResult(ctx, job, analysisFixture(job.IncidentID), fakeProvenance); !errors.Is(err, worker.ErrRepository) {
 				t.Fatal("commit failure was not surfaced")
 			}
 			if after {

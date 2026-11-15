@@ -353,6 +353,9 @@ func TestWorkerAnalysisIntegration(t *testing.T) {
 			input.Severity != "high" || len(input.RawLogs) != 0 || input.AlarmCode != nil || input.OccurredAt != nil {
 			t.Fatal("claimed incident input or nullable fields mismatch")
 		}
+		if input.DeviceName != "Worker synthetic fixture" || input.DeviceType != "amr" || input.DeviceLocation != nil {
+			t.Fatal("claimed input is missing its device context")
+		}
 		job.Token = integrationID(t)
 		if _, err := repo.LoadAnalysisInput(ctx, job); !errors.Is(err, worker.ErrOwnership) {
 			t.Fatal("input query accepted a stale claim token")

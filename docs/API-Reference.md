@@ -237,7 +237,9 @@ failed jobs, and for completed jobs that predate stored results. Otherwise:
 {
   "id": "UUID",
   "schema_version": 1,
-  "source": "fake",
+  "source": "claude",
+  "model_name": "claude-opus-5-5",
+  "prompt_version": "incident-analysis-v1",
   "created_at": "UTC timestamp",
   "result": { "summary": "...", "primary_suspected_cause": "...",
               "contributing_factors": [], "observed_conditions": ["..."],
@@ -246,12 +248,24 @@ failed jobs, and for completed jobs that predate stored results. Otherwise:
 }
 ```
 
-`source: "fake"` marks deterministic test output from the fake analyzer: no
-diagnosis was performed and confidence is 0. The result fields are defined in the
+`source` says which analyzer produced the result:
+
+- `fake` is deterministic test output: no diagnosis was performed, confidence is
+  0, and `model_name` and `prompt_version` are null.
+- `claude` comes from the [Claude analyzer](Worker-and-Analysis.md#claude-analyzer).
+  `model_name` is the model that answered (it can differ from the configured one
+  after a refusal fallback), and `prompt_version` identifies the prompt. It is
+  decision support, not a confirmed diagnosis.
+- `openai` comes from the [OpenAI analyzer](Worker-and-Analysis.md#openai-analyzer),
+  with the same `model_name` and `prompt_version` meaning. Both real analyzers send
+  the same prompt version, so their results are comparable.
+
+The result fields are defined in the
 [analysis contract](Worker-and-Analysis.md#analysis-result-contract). Stored JSON
 is decoded again with the strict validator before it is returned. An unsupported
-version or source, a malformed result, evidence for another incident, or a result
-attached to a non-completed job returns 500 `INTERNAL_ERROR`; unvalidated JSON is
+version or source, provenance that does not match its source, a malformed result,
+evidence for another incident, or a result attached to a non-completed job returns
+500 `INTERNAL_ERROR`; unvalidated JSON is
 never returned. The incident, job status, and analysis are read in one SQL
 statement, so a concurrent completion cannot produce a mixed response.
 

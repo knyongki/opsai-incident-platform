@@ -24,7 +24,12 @@ func (f FakeAnalyzer) Validate() error {
 	}
 	return errors.New("WORKER_FAKE_OUTCOME must be success, transient, permanent, transient-once, or invalid-output")
 }
-func (f FakeAnalyzer) Analyze(ctx context.Context, input AnalysisInput) ([]byte, error) {
+func (f FakeAnalyzer) Analyze(ctx context.Context, input AnalysisInput) (Output, error) {
+	data, err := f.analyze(ctx, input)
+	return Output{JSON: data, Provenance: analysis.Provenance{Source: analysis.SourceFake}}, err
+}
+
+func (f FakeAnalyzer) analyze(ctx context.Context, input AnalysisInput) ([]byte, error) {
 	timer := time.NewTimer(f.Delay)
 	defer timer.Stop()
 	select {

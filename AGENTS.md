@@ -39,9 +39,14 @@ atomically with job completion, and incident detail returns them as a labeled
 router, request ID/access log/panic recovery middleware, the check-local
 -Integration option, tests, and docs. L1 is complete: an explicit
 WORKER_DATABASE_TARGET=main option for the fake worker and incident status
-transitions in the job transactions.
+transitions in the job transactions. Milestone 4C is complete: Claude and OpenAI
+analyzers behind the worker's Analyzer interface with one shared versioned prompt,
+the approved official SDKs github.com/anthropics/anthropic-sdk-go/v2 and
+github.com/openai/openai-go/v3, migrations 00005 and 00006, and the additive
+analysis provenance fields. Live Claude and OpenAI runs cost money and need the
+user's go-ahead each time.
 No later milestone is authorized yet.
-Do not add incident update endpoints, real AI, MQTT,
+Do not add incident update endpoints, more AI providers, AI tools or retrieval, MQTT,
 authentication, cloud synchronization, CI workflows, or later features without
 an explicit new user request. The blueprint is a roadmap, not blanket authorization.
 
@@ -54,9 +59,12 @@ not authorization to implement later features.
 
 - Module: `github.com/knyongki/opsai-incident-platform`.
 - `cmd/api` wires configuration, logging, HTTP startup, and shutdown.
-- `cmd/worker` wires the explicit fake worker and bounded shutdown.
+- `cmd/worker` wires the explicitly chosen analyzer (fake, claude, or openai), the provider startup check, and bounded shutdown.
 - `internal/worker` owns job processing, retry policy, and consumer-owned interfaces.
-- `internal/analysis` owns the versioned result contract and provider-independent validation.
+- `internal/analysis` owns the versioned result contract, provenance, and provider-independent validation.
+- `internal/analyzer/prompt` owns the shared, versioned prompt and schema; any change requires a new Version.
+- `internal/analyzer/claude` and `internal/analyzer/openai` are provider adapters for the worker's
+  Analyzer, using the official Anthropic and OpenAI Go SDKs. A new provider is one adapter package.
 - `internal/config` loads and validates environment configuration.
 - `internal/platform/logging` constructs `log/slog` structured logging.
 - `internal/device` owns device models, validation, service logic, and the repository interface.

@@ -88,7 +88,8 @@ const getIncident = `-- name: GetIncident :one
 SELECT i.id, i.device_id, i.title, i.description, i.alarm_code, i.severity, i.status, i.raw_logs, i.occurred_at, i.created_at, i.updated_at, i.resolved_at, j.status AS job_status,
        a.id AS analysis_id, a.schema_version AS analysis_schema_version,
        a.source AS analysis_source, a.result AS analysis_result,
-       a.created_at AS analysis_created_at
+       a.created_at AS analysis_created_at,
+       a.model_name AS analysis_model_name, a.prompt_version AS analysis_prompt_version
 FROM incidents i
 LEFT JOIN analysis_jobs j ON j.incident_id = i.id
 LEFT JOIN incident_analyses a ON a.incident_id = i.id
@@ -114,6 +115,8 @@ type GetIncidentRow struct {
 	AnalysisSource        pgtype.Text
 	AnalysisResult        []byte
 	AnalysisCreatedAt     pgtype.Timestamptz
+	AnalysisModelName     pgtype.Text
+	AnalysisPromptVersion pgtype.Text
 }
 
 // One statement keeps job status and the optional stored analysis consistent.
@@ -139,6 +142,8 @@ func (q *Queries) GetIncident(ctx context.Context, id pgtype.UUID) (GetIncidentR
 		&i.AnalysisSource,
 		&i.AnalysisResult,
 		&i.AnalysisCreatedAt,
+		&i.AnalysisModelName,
+		&i.AnalysisPromptVersion,
 	)
 	return i, err
 }

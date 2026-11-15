@@ -3,6 +3,7 @@ package analysis
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"math"
 	"reflect"
 	"strconv"
@@ -299,4 +300,33 @@ func FuzzDecode(f *testing.F) {
 			t.Fatal("failed validated round trip")
 		}
 	})
+}
+
+func TestProvenanceValidate(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		p     Provenance
+		valid bool
+	}{
+		{"fake", Provenance{Source: SourceFake}, true},
+		{"claude", Provenance{Source: SourceClaude, ModelName: "claude-opus-5-5", PromptVersion: "incident-analysis-v1"}, true},
+		{"fake with model", Provenance{Source: SourceFake, ModelName: "claude-opus-5-5"}, false},
+		{"fake with prompt", Provenance{Source: SourceFake, PromptVersion: "v1"}, false},
+		{"claude without model", Provenance{Source: SourceClaude, PromptVersion: "v1"}, false},
+		{"claude without prompt", Provenance{Source: SourceClaude, ModelName: "claude-opus-5-5"}, false},
+		{"claude blank model", Provenance{Source: SourceClaude, ModelName: " ", PromptVersion: "v1"}, false},
+		{"claude oversized model", Provenance{Source: SourceClaude, ModelName: strings.Repeat("m", 201), PromptVersion: "v1"}, false},
+		{"openai", Provenance{Source: SourceOpenAI, ModelName: "example-model", PromptVersion: "incident-analysis-v1"}, true},
+		{"openai without model", Provenance{Source: SourceOpenAI, PromptVersion: "v1"}, false},
+		{"openai without prompt", Provenance{Source: SourceOpenAI, ModelName: "example-model"}, false},
+		{"unknown source", Provenance{Source: "real"}, false},
+		{"empty", Provenance{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.p.Validate()
+			if tc.valid != (err == nil) || err != nil && !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Validate() = %v, valid = %v", err, tc.valid)
+			}
+		})
+	}
 }

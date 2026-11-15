@@ -325,6 +325,66 @@ database.
 Set `WORKER_DATABASE_TARGET` back to `isolated` (or remove it) to return to the
 isolated setup below.
 
+## Claude worker
+
+The Claude analyzer produces real structured analyses. Each analysis sends the
+incident's title, description, alarm code, logs, and device details to the
+Anthropic API and is billed to your account. Use synthetic incidents while
+developing. How it works: [Claude analyzer](Worker-and-Analysis.md#claude-analyzer).
+
+1. Get an API key from the Anthropic Console. Add these to private `.env` only,
+   never to `.env.example` or chat:
+
+   ```text
+   WORKER_ANALYZER=claude
+   WORKER_AI_API_KEY=<your key>
+   ```
+
+   `WORKER_AI_MODEL` (default `claude-opus-5-5`) and `WORKER_AI_EFFORT` (default
+   `high`) are optional. Real analyzers default to a 120s attempt timeout and a 180s
+   lease; leave `JOB_ATTEMPT_TIMEOUT` and `JOB_LEASE` empty unless you need longer.
+2. Choose the database as for the fake worker: `WORKER_DATABASE_TARGET=main` with
+   the normal API, or the isolated setup below with its second API.
+3. Start the worker with `scripts/start-worker.ps1`. It first checks the key and
+   model with the Models API (no analysis is generated, nothing is billed for the
+   check), then logs a warning that incident data is sent to Anthropic.
+4. In Postman, run **Incidents - Worker Result**. Its poll waits up to about
+   150 seconds, so a Claude analysis has time to finish; the result has
+   `source: "claude"`, a `model_name`, and a `prompt_version`. With the Postman CLI,
+   pass a long run timeout such as `--timeout 200000`.
+
+If the key, billing, access, model, or effort is rejected, the worker releases the
+job back to the queue with its attempt returned and stops with a message naming the
+cause, instead of failing incidents; fix the setting and start it again. If an older
+`.env` sets `JOB_ATTEMPT_TIMEOUT=30s`, a real analyzer refuses to start: remove it or
+set at least `60s`. Set `WORKER_ANALYZER=fake` to go back to free, deterministic
+output.
+
+## OpenAI worker
+
+The OpenAI analyzer works like the Claude one, with the same prompt, output
+contract, and safety behavior. Each analysis sends the same incident and device
+details to the OpenAI API and is billed to your OpenAI account. How it works:
+[OpenAI analyzer](Worker-and-Analysis.md#openai-analyzer).
+
+1. Add these to private `.env` only:
+
+   ```text
+   WORKER_ANALYZER=openai
+   WORKER_AI_API_KEY=<your OpenAI key>
+   WORKER_AI_MODEL=<a model that supports the Responses API and structured outputs>
+   ```
+
+   `WORKER_AI_MODEL` has no default for OpenAI. `WORKER_AI_EFFORT` (default `high`)
+   must be a reasoning effort your model supports.
+2. Choose the database and start the worker exactly as for the Claude worker. The
+   startup check verifies the key and model with the Models API.
+3. Run **Incidents - Worker Result**; the result has `source: "openai"`.
+
+A rejected key, exhausted quota, unknown model, or unsupported effort releases the
+job and stops the worker; fix the setting and start it again. Only one analyzer
+runs per worker process, and `WORKER_AI_API_KEY` belongs to the chosen provider.
+
 ## Isolated fake worker
 
 The API startup command is unchanged. In the default isolated target, the fake

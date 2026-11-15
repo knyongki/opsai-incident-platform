@@ -5,9 +5,11 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/knyongki/opsai-incident-platform/internal/worker"
 )
@@ -18,18 +20,50 @@ const (
 	TargetMain     = "main"
 )
 
+// Analyzers. There is no default: the worker runs only with an explicit choice.
+const (
+	AnalyzerFake   = "fake"
+	AnalyzerClaude = "claude"
+	AnalyzerOpenAI = "openai"
+)
+
+// AIConfig holds the real analyzer settings, interpreted by the chosen provider.
+// APIKey is a secret: it is passed to the client and must never be logged or
+// included in an error.
+type AIConfig struct {
+	APIKey string
+	Model  string
+	Effort string
+}
+
 type WorkerConfig struct {
 	DatabaseURL string
 	Target      string
+	Analyzer    string
 	LogLevel    slog.Level
 	Policy      worker.Policy
 	Fake        worker.FakeAnalyzer
+	AI          AIConfig
 }
 
+// Model IDs: letters, digits, '.', '_', ':', and '-' (fine-tuned IDs use ':').
+// Real analyzer timing: defaults sized for a slow model call, and a floor below
+// which attempts would be cancelled mid-call.
+const (
+	realAttemptTimeout    = 120 * time.Second
+	realLease             = 180 * time.Second
+	minRealAttemptTimeout = 60 * time.Second
+)
+
+var validModel = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$`)
+
 func LoadWorker() (WorkerConfig, error) {
-	cfg := WorkerConfig{Target: value("WORKER_DATABASE_TARGET", TargetIsolated), Policy: worker.DefaultPolicy()}
-	if os.Getenv("WORKER_ANALYZER") != "fake" {
-		return cfg, errors.New("WORKER_ANALYZER must explicitly be fake")
+	cfg := WorkerConfig{Target: value("WORKER_DATABASE_TARGET", TargetIsolated), Policy: worker.DefaultPolicy(),
+		Analyzer: os.Getenv("WORKER_ANALYZER")}
+	switch cfg.Analyzer {
+	case AnalyzerFake, AnalyzerClaude, AnalyzerOpenAI:
+	default:
+		return cfg, errors.New("WORKER_ANALYZER must explicitly be fake, claude, or openai")
 	}
 	switch cfg.Target {
 	case TargetIsolated:
@@ -52,6 +86,12 @@ func LoadWorker() (WorkerConfig, error) {
 	}
 	if err := cfg.LogLevel.UnmarshalText([]byte(level)); err != nil {
 		return cfg, errors.New("invalid LOG_LEVEL")
+	}
+	realAnalyzer := cfg.Analyzer != AnalyzerFake
+	if realAnalyzer {
+		// A real analysis can take far longer than the fake one; a short deadline
+		// cancels calls that may already be billed and retries them.
+		cfg.Policy.AttemptTimeout, cfg.Policy.Lease = realAttemptTimeout, realLease
 	}
 	durations := []struct {
 		key  string
@@ -82,12 +122,52 @@ func LoadWorker() (WorkerConfig, error) {
 	if err := cfg.Policy.Validate(); err != nil {
 		return cfg, err
 	}
+	if realAnalyzer {
+		if cfg.Policy.AttemptTimeout < minRealAttemptTimeout {
+			return cfg, errors.New("JOB_ATTEMPT_TIMEOUT must be at least 60s for the claude and openai analyzers")
+		}
+		return cfg, loadAI(&cfg.AI, cfg.Analyzer)
+	}
 	cfg.Fake.Outcome = value("WORKER_FAKE_OUTCOME", "success")
 	cfg.Fake.Delay, err = time.ParseDuration(value("WORKER_FAKE_DELAY", "100ms"))
 	if err != nil {
 		return cfg, errors.New("WORKER_FAKE_DELAY must be a duration")
 	}
 	return cfg, cfg.Fake.Validate()
+}
+
+func loadAI(ai *AIConfig, analyzer string) error {
+	ai.APIKey = os.Getenv("WORKER_AI_API_KEY")
+	if ai.APIKey == "" || strings.ContainsFunc(ai.APIKey, unicode.IsSpace) {
+		return errors.New("WORKER_AI_API_KEY is required for the " + analyzer + " analyzer and must not contain spaces")
+	}
+	ai.Model = os.Getenv("WORKER_AI_MODEL")
+	if ai.Model == "" {
+		// OpenAI's lineup changes often, so no OpenAI default is guessed.
+		if analyzer == AnalyzerOpenAI {
+			return errors.New("WORKER_AI_MODEL is required for the openai analyzer")
+		}
+		ai.Model = "claude-opus-5-5"
+	}
+	if !validModel.MatchString(ai.Model) {
+		return errors.New("WORKER_AI_MODEL must be a model ID")
+	}
+	ai.Effort = value("WORKER_AI_EFFORT", "high")
+	if !ValidEffort(ai.Effort) {
+		return errors.New("WORKER_AI_EFFORT must be low, medium, high, xhigh, or max")
+	}
+	return nil
+}
+
+// ValidEffort is the single list of effort levels the worker accepts. Whether a
+// given model supports a level is only known to the provider; an unsupported one
+// releases the job and stops the worker instead of failing it.
+func ValidEffort(effort string) bool {
+	switch effort {
+	case "low", "medium", "high", "xhigh", "max":
+		return true
+	}
+	return false
 }
 
 // The separate URL and database suffix make consuming the regular queue an explicit setup error.

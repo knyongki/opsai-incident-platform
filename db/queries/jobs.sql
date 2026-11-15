@@ -18,9 +18,11 @@ RETURNING j.*;
 SELECT * FROM analysis_jobs WHERE id = $1 FOR UPDATE;
 
 -- name: GetClaimedAnalysisInput :one
-SELECT i.id, i.title, i.description, i.alarm_code, i.severity, i.raw_logs, i.occurred_at
+SELECT i.id, i.title, i.description, i.alarm_code, i.severity, i.raw_logs, i.occurred_at,
+       d.name AS device_name, d.type AS device_type, d.location AS device_location
 FROM analysis_jobs j
 JOIN incidents i ON i.id = j.incident_id
+JOIN devices d ON d.id = i.device_id
 WHERE j.id = sqlc.arg(job_id)::uuid
     AND j.claim_token = sqlc.arg(claim_token)::uuid
     AND j.status = 'running'
@@ -38,9 +40,10 @@ WHERE id = sqlc.arg(id)::uuid AND status = 'running'
     AND lease_expires_at > clock_timestamp();
 
 -- name: InsertIncidentAnalysis :exec
-INSERT INTO incident_analyses (id, incident_id, schema_version, source, result)
+INSERT INTO incident_analyses (id, incident_id, schema_version, source, result, model_name, prompt_version)
 VALUES (sqlc.arg(id)::uuid, sqlc.arg(incident_id)::uuid, sqlc.arg(schema_version)::integer,
-        sqlc.arg(source)::text, sqlc.arg(result)::jsonb);
+        sqlc.arg(source)::text, sqlc.arg(result)::jsonb,
+        sqlc.narg(model_name)::text, sqlc.narg(prompt_version)::text);
 
 -- name: LockRecoverableAnalysisJobs :many
 SELECT * FROM analysis_jobs
@@ -66,3 +69,17 @@ WHERE id = sqlc.arg(id)::uuid
 UPDATE incidents
 SET status = sqlc.arg(status)::text, updated_at = clock_timestamp()
 WHERE id = sqlc.arg(id)::uuid AND status <> 'resolved';
+
+-- name: ReleaseAnalysisJob :execrows
+-- Returns an owned job to the queue without consuming its attempt, for failures
+-- caused by worker configuration rather than by the job.
+UPDATE analysis_jobs
+SET status = 'pending', attempt_count = attempt_count - 1,
+    available_at = clock_timestamp() + sqlc.arg(delay_ms)::bigint * interval '1 millisecond',
+    last_error = sqlc.arg(error_code)::text,
+    claim_token = NULL, locked_at = NULL, lease_expires_at = NULL,
+    updated_at = clock_timestamp()
+WHERE id = sqlc.arg(id)::uuid AND status = 'running'
+    AND claim_token = sqlc.arg(claim_token)::uuid
+    AND lease_expires_at > clock_timestamp()
+    AND attempt_count > 0;

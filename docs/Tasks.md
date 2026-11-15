@@ -19,10 +19,12 @@ describe implemented behavior and operating instructions.
 | 4B - Structured analysis results | Finished | Result contract, migration 00004, atomic worker persistence, detail `analysis` field, and Postman worker-result checks; accepted 2026-11-14 |
 | H1 - HTTP hardening and test automation | Finished | ServeMux routing with the unchanged JSON contract, `X-Request-ID`, access logs, panic recovery, and `check-local.ps1 -Integration`; accepted 2026-11-14 |
 | L1 - Main-database fake worker and incident lifecycle | Finished | Explicit `WORKER_DATABASE_TARGET=main` and incident status transitions (`analyzing`, `analyzed`, `analysis_failed`) in the job transactions; no migration; accepted 2026-11-14 |
+| 4C - Real AI analyzers (Claude, OpenAI) | Finished | Shared versioned prompt, Claude and OpenAI adapters (official SDKs), provenance with migrations 00005 and 00006, worker release on provider-config errors, review fixes, and Postman cloud sync; verified with stand-in servers and a free bad-key check, with no billed live run; accepted 2026-11-15 |
 
-The full incident and AI workflows remain on the blueprint. Milestone 4B stores and
-exposes only deterministic fake results (`source: "fake"`); real AI providers,
-reanalysis, and result history need a new plan and an explicit request.
+The full incident and AI workflows remain on the blueprint. Results come from the
+fake, Claude, or OpenAI analyzer, labeled with `source`, `model_name`, and
+`prompt_version`. Reanalysis, result history, review, resolution, similar-incident
+retrieval, and AI tools need a new plan and an explicit request.
 Lasting contracts and commands are in the [API reference](API-Reference.md)
 (including [incident analysis](API-Reference.md#analysis)), the
 [worker and analysis guide](Worker-and-Analysis.md) (including the

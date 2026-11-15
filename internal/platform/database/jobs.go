@@ -99,6 +99,11 @@ func (r *JobRepository) LoadAnalysisInput(ctx context.Context, job worker.Job) (
 	input := worker.AnalysisInput{
 		IncidentID: uuidString(row.ID), Attempt: job.Attempt, Title: row.Title,
 		Description: row.Description, Severity: row.Severity, RawLogs: row.RawLogs,
+		DeviceName: row.DeviceName, DeviceType: row.DeviceType,
+	}
+	if row.DeviceLocation.Valid {
+		value := row.DeviceLocation.String
+		input.DeviceLocation = &value
 	}
 	if row.AlarmCode.Valid {
 		value := row.AlarmCode.String
@@ -152,8 +157,50 @@ func (r *JobRepository) Finish(ctx context.Context, job worker.Job, outcome work
 	})
 }
 
-// FinishWithResult stores a validated analysis and completes its owned job atomically.
-func (r *JobRepository) FinishWithResult(ctx context.Context, job worker.Job, result analysis.Result) error {
+// Release returns an owned job to pending, gives its attempt back, and reopens the
+// incident, so a configuration problem never fails or charges the job.
+func (r *JobRepository) Release(ctx context.Context, job worker.Job, code string) error {
+	id, err := uuid(job.ID)
+	if err != nil {
+		return worker.ErrOwnership
+	}
+	token, err := uuid(job.Token)
+	if err != nil {
+		return worker.ErrOwnership
+	}
+	return r.transaction(ctx, func(ctx context.Context, q *dbgen.Queries) error {
+		row, err := q.LockAnalysisJob(ctx, id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return worker.ErrOwnership
+		}
+		if err != nil {
+			return worker.ErrRepository
+		}
+		if row.Status != "running" || row.ClaimToken != token {
+			return worker.ErrOwnership
+		}
+		n, err := q.ReleaseAnalysisJob(ctx, dbgen.ReleaseAnalysisJobParams{
+			ID: id, ClaimToken: token, ErrorCode: code, DelayMs: r.policy.RetryBase.Milliseconds(),
+		})
+		if err != nil {
+			return worker.ErrRepository
+		}
+		if n != 1 {
+			return worker.ErrOwnership
+		}
+		if err := q.SetIncidentAnalysisStatus(ctx, dbgen.SetIncidentAnalysisStatusParams{ID: row.IncidentID, Status: "open"}); err != nil {
+			return worker.ErrRepository
+		}
+		return nil
+	})
+}
+
+// FinishWithResult stores a validated analysis with its provenance and completes
+// its owned job atomically.
+func (r *JobRepository) FinishWithResult(ctx context.Context, job worker.Job, result analysis.Result, p analysis.Provenance) error {
+	if err := p.Validate(); err != nil {
+		return analysis.ErrInvalid
+	}
 	id, err := uuid(job.ID)
 	if err != nil {
 		return worker.ErrOwnership
@@ -189,7 +236,9 @@ func (r *JobRepository) FinishWithResult(ctx context.Context, job worker.Job, re
 		}
 		if err := q.InsertIncidentAnalysis(ctx, dbgen.InsertIncidentAnalysisParams{
 			ID: analysisID, IncidentID: row.IncidentID, SchemaVersion: analysis.SchemaVersion,
-			Source: "fake", Result: encoded,
+			Source: p.Source, Result: encoded,
+			ModelName:     pgtype.Text{String: p.ModelName, Valid: p.ModelName != ""},
+			PromptVersion: pgtype.Text{String: p.PromptVersion, Valid: p.PromptVersion != ""},
 		}); err != nil {
 			return worker.ErrRepository
 		}

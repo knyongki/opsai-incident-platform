@@ -36,11 +36,15 @@ type Detail struct {
 	Analysis *Analysis `json:"analysis"`
 }
 
-// Analysis is a stored, revalidated result; ID, version, source, and time are trusted metadata.
+// Analysis is a stored result, revalidated on every read. ID, version, source,
+// model, prompt version, and time are trusted metadata; ModelName and
+// PromptVersion are null for fake results and set for real analyzers.
 type Analysis struct {
 	ID            string          `json:"id"`
 	SchemaVersion int             `json:"schema_version"`
 	Source        string          `json:"source"`
+	ModelName     *string         `json:"model_name"`
+	PromptVersion *string         `json:"prompt_version"`
 	CreatedAt     time.Time       `json:"created_at"`
 	Result        analysis.Result `json:"result"`
 }

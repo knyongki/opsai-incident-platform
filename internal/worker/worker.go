@@ -16,6 +16,15 @@ var (
 	ErrRepository = errors.New("job storage operation failed")
 	ErrTransient  = errors.New("transient analyzer failure")
 	ErrPermanent  = errors.New("permanent analyzer failure")
+	// ErrRefused means the model declined the request; retrying will not help.
+	ErrRefused = errors.New("analyzer refused the request")
+	// ErrInvalidOutput means the analyzer produced no usable result, for example
+	// a response cut off at the token limit.
+	ErrInvalidOutput = errors.New("analyzer output unusable")
+	// ErrProviderConfig means the provider rejected the worker's credentials or
+	// access. The job is released and the worker stops, so a bad key cannot fail
+	// the whole queue.
+	ErrProviderConfig = errors.New("analyzer provider configuration rejected")
 )
 
 type Job struct {
@@ -23,25 +32,43 @@ type Job struct {
 	Attempt               int
 }
 type AnalysisInput struct {
-	IncidentID  string
-	Attempt     int
-	Title       string
-	Description string
-	AlarmCode   *string
-	Severity    string
-	RawLogs     []string
-	OccurredAt  *time.Time
+	IncidentID     string
+	Attempt        int
+	Title          string
+	Description    string
+	AlarmCode      *string
+	Severity       string
+	RawLogs        []string
+	OccurredAt     *time.Time
+	DeviceName     string
+	DeviceType     string
+	DeviceLocation *string
+}
+
+// Output is an analyzer's raw JSON result plus trusted metadata stored with it.
+type Output struct {
+	JSON       []byte
+	Provenance analysis.Provenance
+	Usage      Usage
+}
+
+// Usage holds provider token counts for logging; zero for the fake analyzer.
+type Usage struct {
+	InputTokens, OutputTokens int64
 }
 
 type Repository interface {
 	Claim(context.Context) (Job, error)
 	LoadAnalysisInput(context.Context, Job) (AnalysisInput, error)
 	Finish(context.Context, Job, Outcome) error
-	FinishWithResult(context.Context, Job, analysis.Result) error
+	// Release returns an owned job to the queue and gives its attempt back, for
+	// failures caused by worker configuration rather than by the job.
+	Release(ctx context.Context, job Job, code string) error
+	FinishWithResult(context.Context, Job, analysis.Result, analysis.Provenance) error
 	Recover(context.Context) error
 }
 type Analyzer interface {
-	Analyze(context.Context, AnalysisInput) ([]byte, error)
+	Analyze(context.Context, AnalysisInput) (Output, error)
 }
 
 type Outcome struct {
@@ -102,6 +129,10 @@ func (p Policy) Result(attempt int, err error) Outcome {
 		return p.Failure(attempt, "ANALYSIS_TIMEOUT", true)
 	case errors.Is(err, ErrTransient):
 		return p.Failure(attempt, "ANALYSIS_TRANSIENT", true)
+	case errors.Is(err, ErrRefused):
+		return p.Failure(attempt, "ANALYSIS_REFUSED", false)
+	case errors.Is(err, ErrInvalidOutput):
+		return p.Failure(attempt, "ANALYSIS_INVALID_OUTPUT", false)
 	default:
 		return p.Failure(attempt, "ANALYSIS_PERMANENT", false)
 	}
@@ -118,7 +149,7 @@ func ValidOutcome(o Outcome) bool {
 	}
 	switch o.Code {
 	case "ANALYSIS_TIMEOUT", "ANALYSIS_TRANSIENT", "ANALYSIS_PERMANENT", "ANALYSIS_INVALID_OUTPUT",
-		"ANALYSIS_INPUT_UNAVAILABLE":
+		"ANALYSIS_INPUT_UNAVAILABLE", "ANALYSIS_REFUSED", "ANALYSIS_PROVIDER_CONFIG":
 		return true
 	}
 	return false
@@ -187,7 +218,7 @@ func (w *Worker) Step(ctx context.Context) error {
 		return err
 	}
 	started := time.Now()
-	w.logger.Info("fake analysis started", "job_id", job.ID, "incident_id", input.IncidentID, "attempt", job.Attempt)
+	w.logger.Info("analysis started", "job_id", job.ID, "incident_id", input.IncidentID, "attempt", job.Attempt)
 	actx, stop := context.WithTimeout(ctx, w.policy.AttemptTimeout)
 	output, analysisErr := w.analyzer.Analyze(actx, input)
 	// A late success cannot turn an expired attempt into success.
@@ -198,12 +229,24 @@ func (w *Worker) Step(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	if errors.Is(analysisErr, ErrProviderConfig) {
+		dbctx, cancel := context.WithTimeout(ctx, w.policy.DatabaseTimeout)
+		releaseErr := w.repo.Release(dbctx, job, "ANALYSIS_PROVIDER_CONFIG")
+		cancel()
+		w.logger.Error("analyzer provider rejected the worker configuration; stopping", "job_id", job.ID,
+			"error_code", "ANALYSIS_PROVIDER_CONFIG")
+		if releaseErr != nil {
+			w.logger.Warn("claimed job release failed; awaiting lease recovery", "job_id", job.ID,
+				"error_code", "JOB_RELEASE_FAILED")
+		}
+		return ErrProviderConfig
+	}
 	var result *analysis.Result
 	var outcome Outcome
 	if analysisErr != nil {
 		outcome = w.policy.Result(job.Attempt, analysisErr)
 	} else {
-		validated, err := analysis.Decode(output, input.IncidentID)
+		validated, err := analysis.Decode(output.JSON, input.IncidentID)
 		if err != nil {
 			outcome = Outcome{Status: "failed", Code: "ANALYSIS_INVALID_OUTPUT"}
 		} else {
@@ -217,7 +260,7 @@ func (w *Worker) Step(ctx context.Context) error {
 	dbctx, cancel = context.WithTimeout(ctx, w.policy.DatabaseTimeout)
 	defer cancel()
 	if result != nil {
-		err = w.repo.FinishWithResult(dbctx, job, *result)
+		err = w.repo.FinishWithResult(dbctx, job, *result, output.Provenance)
 		// The rolled-back transaction rejected the result; record it as invalid output.
 		// Reusing dbctx keeps both calls within one database timeout of the lease budget.
 		if errors.Is(err, analysis.ErrInvalid) {
@@ -230,17 +273,26 @@ func (w *Worker) Step(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	w.logger.Info("fake analysis finished", "job_id", job.ID, "incident_id", input.IncidentID,
+	w.logger.Info("analysis finished", "job_id", job.ID, "incident_id", input.IncidentID,
 		"attempt", job.Attempt, "duration_ms", time.Since(started).Milliseconds(),
-		"status", outcome.Status, "error_code", outcome.Code)
+		"status", outcome.Status, "error_code", outcome.Code,
+		"source", output.Provenance.Source, "model_name", output.Provenance.ModelName,
+		"prompt_version", output.Provenance.PromptVersion,
+		"input_tokens", output.Usage.InputTokens, "output_tokens", output.Usage.OutputTokens)
 	return nil
 }
-func (w *Worker) Run(ctx context.Context) {
+
+// Run processes jobs until ctx is canceled (nil) or the provider rejects the
+// worker's configuration (ErrProviderConfig), which needs operator action.
+func (w *Worker) Run(ctx context.Context) error {
 	failures := 0
 	for ctx.Err() == nil {
 		err := w.Step(ctx)
 		if ctx.Err() != nil {
-			return
+			return nil
+		}
+		if errors.Is(err, ErrProviderConfig) {
+			return err
 		}
 		delay := w.policy.PollInterval
 		switch {
@@ -261,8 +313,9 @@ func (w *Worker) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return
+			return nil
 		case <-timer.C:
 		}
 	}
+	return nil
 }

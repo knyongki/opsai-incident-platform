@@ -68,7 +68,7 @@ func TestIncidentLifecycleIntegration(t *testing.T) {
 		assertIncidentStatus(t, pool, ctx, ids[0], "analyzing")
 		makeAvailable(t, pool, ctx, ids[0])
 		job = claim(t, repo)
-		if err := repo.FinishWithResult(ctx, job, analysisFixture(job.IncidentID)); err != nil {
+		if err := repo.FinishWithResult(ctx, job, analysisFixture(job.IncidentID), fakeProvenance); err != nil {
 			t.Fatal("finish with result failed")
 		}
 		assertIncidentStatus(t, pool, ctx, ids[0], "analyzed")
@@ -133,13 +133,39 @@ func TestIncidentLifecycleIntegration(t *testing.T) {
 		assertIncidentStatus(t, pool, ctx, ids[0], "analysis_failed")
 	})
 
+	t.Run("release returns the attempt even on the last one", func(t *testing.T) {
+		ids := jobFixtures(t, pool, ctx, 1)
+		jobExec(t, pool, ctx, "UPDATE analysis_jobs SET attempt_count=$2 WHERE id=$1", ids[0], p.MaxAttempts-1)
+		job := claim(t, repo)
+		if job.Attempt != p.MaxAttempts {
+			t.Fatalf("claimed attempt %d, want the last attempt %d", job.Attempt, p.MaxAttempts)
+		}
+		if err := repo.Release(ctx, job, "ANALYSIS_PROVIDER_CONFIG"); err != nil {
+			t.Fatal("release failed")
+		}
+		assertJob(t, pool, ctx, ids[0], "pending", p.MaxAttempts-1)
+		assertIncidentStatus(t, pool, ctx, ids[0], "open")
+		var code string
+		if err := pool.QueryRow(ctx, "SELECT last_error FROM analysis_jobs WHERE id=$1", ids[0]).Scan(&code); err != nil || code != "ANALYSIS_PROVIDER_CONFIG" {
+			t.Fatal("release code not recorded")
+		}
+		makeAvailable(t, pool, ctx, ids[0])
+		again := claim(t, repo)
+		if again.Attempt != p.MaxAttempts || again.Token == job.Token {
+			t.Fatal("released job could not be claimed again on the same attempt")
+		}
+		if err := repo.Release(ctx, job, "ANALYSIS_PROVIDER_CONFIG"); !errors.Is(err, worker.ErrOwnership) {
+			t.Fatal("stale owner released a job it no longer owns")
+		}
+	})
+
 	t.Run("resolved incident is never overwritten", func(t *testing.T) {
 		ids := jobFixtures(t, pool, ctx, 2)
 		for _, id := range ids {
 			jobExec(t, pool, ctx, "UPDATE incidents SET status='resolved' WHERE id=(SELECT incident_id FROM analysis_jobs WHERE id=$1)", id)
 		}
 		first := claim(t, repo)
-		if err := repo.FinishWithResult(ctx, first, analysisFixture(first.IncidentID)); err != nil {
+		if err := repo.FinishWithResult(ctx, first, analysisFixture(first.IncidentID), fakeProvenance); err != nil {
 			t.Fatal("finish with result failed")
 		}
 		second := claim(t, repo)
@@ -166,7 +192,7 @@ func TestIncidentLifecycleIntegration(t *testing.T) {
 		assertIncidentStatus(t, pool, ctx, ids[0], "open")
 
 		job := claim(t, repo)
-		if err := faulty.FinishWithResult(ctx, job, analysisFixture(job.IncidentID)); !errors.Is(err, worker.ErrRepository) {
+		if err := faulty.FinishWithResult(ctx, job, analysisFixture(job.IncidentID), fakeProvenance); !errors.Is(err, worker.ErrRepository) {
 			t.Fatal("completion succeeded without its incident update")
 		}
 		assertNoAnalysis(t, pool, ctx, job.IncidentID)

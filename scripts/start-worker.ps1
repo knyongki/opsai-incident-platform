@@ -51,9 +51,9 @@ try {
         return
     }
     if ($target -eq 'main') {
-        Write-Host 'Starting the explicit fake worker on the main local database. Results are labeled fake and stay stored.'
+        Write-Host "Starting the $($settings.WORKER_ANALYZER) worker on the main local database. Stored results are permanent."
     } else {
-        Write-Host 'Starting the explicit fake worker. Its separate test database must already be migrated.'
+        Write-Host "Starting the $($settings.WORKER_ANALYZER) worker. Its separate test database must already be migrated."
     }
     & go run ./cmd/worker
     if ($LASTEXITCODE -ne 0) { throw 'Worker stopped with an error.' }

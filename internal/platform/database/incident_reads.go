@@ -132,15 +132,27 @@ func incidentAnalysis(row dbgen.GetIncidentRow, analysisStatus string) (*inciden
 	}
 	if analysisStatus != "completed" || !row.AnalysisSchemaVersion.Valid ||
 		row.AnalysisSchemaVersion.Int32 != analysis.SchemaVersion ||
-		!row.AnalysisSource.Valid || row.AnalysisSource.String != "fake" || !row.AnalysisCreatedAt.Valid {
+		!row.AnalysisSource.Valid || !row.AnalysisCreatedAt.Valid {
+		return nil, incident.ErrRepository
+	}
+	provenance := analysis.Provenance{Source: row.AnalysisSource.String,
+		ModelName: row.AnalysisModelName.String, PromptVersion: row.AnalysisPromptVersion.String}
+	if provenance.Validate() != nil {
 		return nil, incident.ErrRepository
 	}
 	result, err := analysis.Decode(row.AnalysisResult, uuidString(row.ID))
 	if err != nil {
 		return nil, incident.ErrRepository
 	}
-	return &incident.Analysis{
-		ID: uuidString(row.AnalysisID), SchemaVersion: analysis.SchemaVersion, Source: row.AnalysisSource.String,
+	a := &incident.Analysis{
+		ID: uuidString(row.AnalysisID), SchemaVersion: analysis.SchemaVersion, Source: provenance.Source,
 		CreatedAt: row.AnalysisCreatedAt.Time.UTC(), Result: result,
-	}, nil
+	}
+	if row.AnalysisModelName.Valid {
+		a.ModelName = &provenance.ModelName
+	}
+	if row.AnalysisPromptVersion.Valid {
+		a.PromptVersion = &provenance.PromptVersion
+	}
+	return a, nil
 }

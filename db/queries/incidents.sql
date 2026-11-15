@@ -24,7 +24,8 @@ LIMIT sqlc.arg(row_limit)::int;
 SELECT i.*, j.status AS job_status,
        a.id AS analysis_id, a.schema_version AS analysis_schema_version,
        a.source AS analysis_source, a.result AS analysis_result,
-       a.created_at AS analysis_created_at
+       a.created_at AS analysis_created_at,
+       a.model_name AS analysis_model_name, a.prompt_version AS analysis_prompt_version
 FROM incidents i
 LEFT JOIN analysis_jobs j ON j.incident_id = i.id
 LEFT JOIN incident_analyses a ON a.incident_id = i.id

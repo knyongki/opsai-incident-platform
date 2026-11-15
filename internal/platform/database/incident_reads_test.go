@@ -77,8 +77,25 @@ func TestIncidentAnalysisConversion(t *testing.T) {
 	got, err := incidentAnalysis(stored(), "completed")
 	if err != nil || got == nil || got.ID != analysisID || got.SchemaVersion != 1 || got.Source != "fake" ||
 		got.CreatedAt.Location() != time.UTC || !got.CreatedAt.Equal(created) ||
-		got.Result.Summary != "Synthetic summary" || len(got.Result.Evidence) != 1 || got.Result.Evidence[0].SourceID != incidentID {
+		got.Result.Summary != "Synthetic summary" || len(got.Result.Evidence) != 1 || got.Result.Evidence[0].SourceID != incidentID ||
+		got.ModelName != nil || got.PromptVersion != nil {
 		t.Fatalf("stored analysis conversion: %+v %v", got, err)
+	}
+	claudeRow := stored()
+	claudeRow.AnalysisSource.String = "claude"
+	claudeRow.AnalysisModelName = pgtype.Text{String: "claude-opus-5-5", Valid: true}
+	claudeRow.AnalysisPromptVersion = pgtype.Text{String: "incident-analysis-v1", Valid: true}
+	got, err = incidentAnalysis(claudeRow, "completed")
+	if err != nil || got == nil || got.Source != "claude" || got.ModelName == nil || *got.ModelName != "claude-opus-5-5" ||
+		got.PromptVersion == nil || *got.PromptVersion != "incident-analysis-v1" {
+		t.Fatalf("claude analysis conversion: %+v %v", got, err)
+	}
+	openaiRow := claudeRow
+	openaiRow.AnalysisSource.String = "openai"
+	openaiRow.AnalysisModelName.String = "example-model"
+	if got, err := incidentAnalysis(openaiRow, "completed"); err != nil || got == nil || got.Source != "openai" ||
+		*got.ModelName != "example-model" {
+		t.Fatalf("openai analysis conversion: %+v %v", got, err)
 	}
 
 	for _, tc := range []struct {
@@ -95,6 +112,10 @@ func TestIncidentAnalysisConversion(t *testing.T) {
 		{"missing timestamp", "completed", func(r *dbgen.GetIncidentRow) { r.AnalysisCreatedAt.Valid = false }},
 		{"malformed result", "completed", func(r *dbgen.GetIncidentRow) { r.AnalysisResult = []byte(`{"summary":"sensitive stored text"}`) }},
 		{"evidence for another incident", "completed", func(r *dbgen.GetIncidentRow) { r.AnalysisResult = storedAnalysisJSON(t, analysisID) }},
+		{"claude without provenance", "completed", func(r *dbgen.GetIncidentRow) { r.AnalysisSource.String = "claude" }},
+		{"fake with provenance", "completed", func(r *dbgen.GetIncidentRow) {
+			r.AnalysisModelName = pgtype.Text{String: "claude-opus-5-5", Valid: true}
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			row := stored()
