@@ -92,7 +92,7 @@ policy, and never mix worker versions that complete jobs differently.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `WORKER_ANALYZER` | Empty; must explicitly be `fake`, `claude`, or `openai` | Chooses the analyzer |
+| `WORKER_ANALYZER` | Required by the worker; `.env.example` sets `fake` | `fake`, `claude`, or `openai`; real analyzers are never chosen by default |
 | `WORKER_DATABASE_TARGET` | `isolated` | `isolated` uses `WORKER_DATABASE_URL`; `main` uses `DATABASE_URL` |
 | `WORKER_DATABASE_URL` | Required for the isolated target | Separate localhost database ending in `_worker_test` |
 | `WORKER_FAKE_OUTCOME` | `success` | `success`, `transient`, `permanent`, `transient-once`, or `invalid-output` |

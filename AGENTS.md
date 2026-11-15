@@ -158,8 +158,11 @@ and consistency review, not a database startup.
 
 Configure private `.env` once with the required keys from `.env.example`, or securely
 configure `DATABASE_URL` and matching PostgreSQL settings in the terminal.
-New WORKER_/JOB_ keys are optional for existing API configurations. Worker mode and
-its separate WORKER_DATABASE_URL require explicit configuration.
+New WORKER_/JOB_ keys are optional for existing API configurations. The worker
+binary requires WORKER_ANALYZER; `.env.example` supplies the free `fake` analyzer,
+and real analyzers (claude, openai) always need an explicit choice and a key. Keep
+every `.env.example` key commented with its purpose, and mark values users must
+replace (passwords, keys, URLs) as "SET YOUR OWN" with obvious placeholders.
 
 | Task | Command after `powershell -NoProfile -ExecutionPolicy Bypass -File` |
 | --- | --- |

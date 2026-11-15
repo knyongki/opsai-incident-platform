@@ -103,7 +103,10 @@ not references such as `DATABASE_URL=postgres://${POSTGRES_USER}:...`.
 Private `.env` values take precedence over inherited terminal values. Missing
 required API/database keys, duplicate keys, or unknown keys fail without printing
 values. Optional WORKER_/JOB_ keys may be absent from older private files and use
-inherited settings or example defaults. Fake mode is disabled by default. The Go API itself reads
+inherited settings or example defaults. The example analyzer is `fake` (free and
+local); real analysis needs an explicit `WORKER_ANALYZER=claude` or `openai` and your
+own key. Every key in `.env.example` has a comment saying what it is for and which
+values you must set yourself (marked "SET YOUR OWN"). The Go API itself reads
 environment variables; the scripts load the file into child-process environments.
 
 `.env` stays Git-ignored and contains plaintext local configuration. Never commit,
@@ -341,8 +344,9 @@ developing. How it works: [Claude analyzer](Worker-and-Analysis.md#claude-analyz
    ```
 
    `WORKER_AI_MODEL` (default `claude-opus-5-5`) and `WORKER_AI_EFFORT` (default
-   `high`) are optional. Real analyzers default to a 120s attempt timeout and a 180s
-   lease; leave `JOB_ATTEMPT_TIMEOUT` and `JOB_LEASE` empty unless you need longer.
+   `high`) are optional. Real analyzers need an attempt timeout of at least 60s; the
+   example values (`JOB_ATTEMPT_TIMEOUT=120s`, `JOB_LEASE=180s`) work for every
+   analyzer, and an empty value uses the same defaults for real analyzers.
 2. Choose the database as for the fake worker: `WORKER_DATABASE_TARGET=main` with
    the normal API, or the isolated setup below with its second API.
 3. Start the worker with `scripts/start-worker.ps1`. It first checks the key and
